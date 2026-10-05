@@ -332,7 +332,7 @@ Measured at ~1 000 flow records/second (far more than a busy home network): **~1
 # upgrade (keeps settings and history) — just run the installer again
 fetch -qo - https://github.com/heresjohnny320/traffic-monitor-tool/releases/latest/download/install.sh | sh
 # specific version
-fetch -qo - .../install.sh | VERSION=v1.2.0 sh
+fetch -qo - .../install.sh | VERSION=v1.2 sh
 # uninstall (keeps settings/history); PURGE=1 also deletes them
 fetch -qo - .../install.sh | sh -s uninstall
 fetch -qo - .../install.sh | PURGE=1 sh -s uninstall
@@ -365,4 +365,4 @@ go run . all                                # dashboard on :8080
 Layout: `internal/netflow` (v5/v9/IPFIX decoder), `internal/collector` (aggregation, SNMP), `internal/live` (in-memory state), `internal/store` (SQLite/Postgres), `internal/snapshot` (shared view), `internal/web` (dashboard, settings, API, metrics; static UI embedded, no external scripts), `internal/hass` (MQTT discovery), `install.sh`.
 
 **CI** (`.github/workflows/ci.yml`) runs on every push/PR: gofmt, vet, race tests, 60 s fuzzing, govulncheck, shellcheck, JS syntax, and builds for FreeBSD amd64/arm64/armv7 (pfSense/OPNsense), Linux amd64/arm64/armv7, macOS and Windows (downloadable from the run).
-**Releases**: `git tag v1.0.0 && git push origin v1.0.0` → `.github/workflows/release.yml` publishes archives, `SHA256SUMS` and `install.sh` with this repository filled in.
+**Releases**: every push to `main` (except docs-only changes) runs `.github/workflows/release.yml`, which tests, builds, and publishes the next version (v1.0, v1.1, … v1.9, v2.0, …) with archives, `SHA256SUMS` and `install.sh` with this repository filled in.

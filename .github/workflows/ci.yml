@@ -1,12 +1,11 @@
 name: CI
 
-# Every push and pull request: lint, test, security scans, and a build for
-# every platform (pfSense/OPNsense = FreeBSD). Binaries are attached to the run.
+# Pull requests: lint, test, security scans, and a build for every platform
+# (pfSense/OPNsense = FreeBSD). Binaries are attached to the run. Pushes to
+# main are tested and released by release.yml.
 on:
-  push:
-    branches: ["**"]
-    tags-ignore: ["v*"] # tags are handled by release.yml
   pull_request:
+  workflow_dispatch:
 
 permissions:
   contents: read

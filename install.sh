@@ -10,7 +10,7 @@
 #
 # Re-running install upgrades the binary and keeps your settings.
 # Options (environment variables):
-#   VERSION=v1.2.0   install a specific release instead of the latest
+#   VERSION=v1.2     install a specific release instead of the latest
 #   PORT=8080        dashboard port for a new install
 #   PURGE=1          with uninstall: also delete settings and history
 #   BASE_URL=...     download from a mirror instead of GitHub releases
