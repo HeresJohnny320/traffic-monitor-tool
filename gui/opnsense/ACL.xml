@@ -1,0 +1,11 @@
+<!-- Lets non-root OPNsense users be given access to Traffic Monitor.
+     Installed by Traffic Monitor's install.sh. -->
+<acl>
+    <page-reporting-trafficmonitor>
+        <name>Reporting: Traffic Monitor</name>
+        <patterns>
+            <pattern>ui/trafficmonitor/*</pattern>
+            <pattern>traffic_monitor.php*</pattern>
+        </patterns>
+    </page-reporting-trafficmonitor>
+</acl>

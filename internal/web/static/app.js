@@ -1,5 +1,6 @@
 import { chart } from "./chart.js";
 import { loadSettings } from "./settings.js";
+import { apiURL, changeHeaders } from "./embed.js";
 
 // ------------------------------------------------------------------ helpers
 const $ = s => document.querySelector(s);
@@ -43,7 +44,7 @@ const store = {
 
 async function api(path, params = {}) {
   const q = new URLSearchParams(Object.entries(params).filter(([, v]) => v !== "" && v != null));
-  const r = await fetch(`api/${path}${q.size ? "?" + q : ""}`);
+  const r = await fetch(apiURL(`${path}${q.size ? "?" + q : ""}`));
   if (!r.ok) throw new Error(`${path}: ${r.status} ${await r.text()}`);
   return r.json();
 }
@@ -448,7 +449,7 @@ async function loadIfaces() {
         e.stopPropagation();
         const v = prompt(`Label for ${r.name}`, r.label);
         if (v == null) return;
-        await fetch("api/ifaces/rename", { method: "POST", headers: { "Content-Type": "application/json", "X-Traffic-Monitor": "1" }, body: JSON.stringify({ name: r.name, label: v.trim() }) });
+        await fetch(apiURL("ifaces/rename"), { method: "POST", headers: changeHeaders, body: JSON.stringify({ name: r.name, label: v.trim() }) });
         refresh();
       } }, "✎") },
   ], rows, { onClick: r => { state.ifaceSel = r.name; loadIfaces(); }, empty: "No interface data – SNMP is disabled or hasn't polled yet" });
@@ -524,7 +525,7 @@ $("#scrim").addEventListener("click", closeDrawer);
 document.addEventListener("keydown", e => { if (e.key === "Escape") closeDrawer(); });
 $("#dr-save").addEventListener("click", async () => {
   if (!drawerIP) return;
-  await fetch("api/hosts/rename", { method: "POST", headers: { "Content-Type": "application/json", "X-Traffic-Monitor": "1" }, body: JSON.stringify({ ip: drawerIP, name: $("#dr-rename").value.trim() }) });
+  await fetch(apiURL("hosts/rename"), { method: "POST", headers: changeHeaders, body: JSON.stringify({ ip: drawerIP, name: $("#dr-rename").value.trim() }) });
   const ip = drawerIP;
   refresh();
   openHost(ip);

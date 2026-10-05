@@ -44,6 +44,11 @@ jobs:
 
       - run: shellcheck -s sh install.sh
 
+      - name: Firewall web UI pages (PHP syntax, XML)
+        run: |
+          for f in gui/*.php gui/*/*.php gui/*/*.inc; do php -l "$f"; done
+          for f in gui/*/*.xml; do php -r '$x = new DOMDocument(); exit($x->load($argv[1]) ? 0 : 1);' "$f"; done
+
   release:
     needs: test
     runs-on: ubuntu-latest
@@ -85,6 +90,7 @@ jobs:
             ext=""; [ "$os" = windows ] && ext=.exe
             GOOS=$os GOARCH=$arch go build -trimpath -ldflags "-s -w -X main.version=$VERSION" -o "$dir/traffic-monitor$ext" .
             cp README.md traffic-monitor.example.yaml "$dir/"
+            if [ "$os" = freebsd ]; then cp -R gui "$dir/"; fi # pfSense/OPNsense web UI pages
             name="traffic-monitor_${os}_${arch}"
             if [ "$os" = windows ]; then (cd "$dir" && zip -q "../../release/$name.zip" ./*)
             else tar -czf "release/$name.tar.gz" -C "$dir" .; fi

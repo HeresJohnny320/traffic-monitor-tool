@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8" ?>
+<!-- Status → Traffic Monitor menu entry. Installed by Traffic Monitor's
+     install.sh in /usr/local/share/pfSense/menu/. -->
+<packagegui>
+	<name>traffic-monitor</name>
+	<menu>
+		<name>Traffic Monitor</name>
+		<section>Status</section>
+		<url>/status_traffic_monitor.php</url>
+	</menu>
+</packagegui>

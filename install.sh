@@ -61,6 +61,14 @@ if [ "$PLATFORM" = pfsense ]; then RC=/usr/local/etc/rc.d/traffic_monitor.sh  # 
 else RC=/usr/local/etc/rc.d/traffic_monitor; fi
 UNIT=/etc/systemd/system/traffic-monitor.service
 
+# Pages that show the dashboard inside the firewall's web UI (from gui/ in the
+# release archive): pfSense Status → Traffic Monitor, OPNsense Reporting →
+# Traffic Monitor. traffic_monitor.php passes requests to the service.
+WWW=/usr/local/www
+OPN_MVC=/usr/local/opnsense/mvc/app
+GUI_FILES_PFSENSE="$WWW/traffic_monitor.php $WWW/status_traffic_monitor.php /usr/local/share/pfSense/menu/traffic_monitor.xml /etc/inc/priv/traffic_monitor.priv.inc"
+GUI_FILES_OPNSENSE="$WWW/traffic_monitor.php $OPN_MVC/controllers/OPNsense/TrafficMonitor $OPN_MVC/views/OPNsense/TrafficMonitor $OPN_MVC/models/OPNsense/TrafficMonitor"
+
 download() { # url dest
   if command -v fetch >/dev/null 2>&1; then fetch -qo "$2" "$1"
   elif command -v curl >/dev/null 2>&1; then curl -fsSL -o "$2" "$1"
@@ -104,6 +112,48 @@ install_binary() {
     install -m 0644 "$tmp/traffic-monitor.example.yaml" "$CONF_DIR/traffic-monitor.example.yaml" 2>/dev/null || true
   fi
   say "Installed $("$BIN" version)"
+}
+
+# install_gui adds Traffic Monitor to the firewall's web UI menu.
+install_gui() {
+  g="$tmp/gui"
+  if [ ! -f "$g/traffic_monitor.php" ]; then
+    warn "this release has no firewall web UI pages; use the dashboard on its own port"
+    return
+  fi
+  install -m 0644 "$g/traffic_monitor.php" "$WWW/traffic_monitor.php"
+  case "$PLATFORM" in
+    pfsense)
+      mkdir -p /usr/local/share/pfSense/menu /etc/inc/priv
+      install -m 0644 "$g/pfsense/status_traffic_monitor.php" "$WWW/status_traffic_monitor.php"
+      install -m 0644 "$g/pfsense/traffic_monitor.xml" /usr/local/share/pfSense/menu/traffic_monitor.xml
+      install -m 0644 "$g/pfsense/traffic_monitor.priv.inc" /etc/inc/priv/traffic_monitor.priv.inc
+      ;;
+    opnsense)
+      mkdir -p "$OPN_MVC/controllers/OPNsense/TrafficMonitor" "$OPN_MVC/views/OPNsense/TrafficMonitor" \
+        "$OPN_MVC/models/OPNsense/TrafficMonitor/Menu" "$OPN_MVC/models/OPNsense/TrafficMonitor/ACL"
+      install -m 0644 "$g/opnsense/IndexController.php" "$OPN_MVC/controllers/OPNsense/TrafficMonitor/IndexController.php"
+      install -m 0644 "$g/opnsense/index.volt" "$OPN_MVC/views/OPNsense/TrafficMonitor/index.volt"
+      install -m 0644 "$g/opnsense/Menu.xml" "$OPN_MVC/models/OPNsense/TrafficMonitor/Menu/Menu.xml"
+      install -m 0644 "$g/opnsense/ACL.xml" "$OPN_MVC/models/OPNsense/TrafficMonitor/ACL/ACL.xml"
+      rm -f /var/lib/php/tmp/opnsense_menu_cache.xml /var/lib/php/tmp/opnsense_acl_cache.json
+      ;;
+  esac
+  # the secret the proxy page sends so the service trusts the firewall's login
+  if [ ! -s "$CONF_DIR/gui-token" ]; then
+    (umask 077; random_secret > "$CONF_DIR/gui-token")
+  fi
+  GUI_INSTALLED=yes
+}
+
+remove_gui() {
+  case "$PLATFORM" in
+    pfsense) files=$GUI_FILES_PFSENSE ;;
+    opnsense) files=$GUI_FILES_OPNSENSE ;;
+    *) return ;;
+  esac
+  for f in $files; do rm -rf "$f"; done
+  rm -f "$CONF_DIR/gui-token" /var/lib/php/tmp/opnsense_menu_cache.xml /var/lib/php/tmp/opnsense_acl_cache.json
 }
 
 create_user() {
@@ -249,9 +299,12 @@ do_install() {
   create_user
   NEW_PASSWORD=""
   write_config
+  GUI_INSTALLED=no
+  case "$PLATFORM" in pfsense|opnsense) install_gui ;; esac
   chown -R "$SVC_USER" "$CONF_DIR" "$DATA_DIR"
   chmod 0750 "$CONF_DIR" "$DATA_DIR"
   chmod 0600 "$CONF"
+  [ -f "$CONF_DIR/gui-token" ] && chmod 0400 "$CONF_DIR/gui-token"
   if [ "$OS" = linux ]; then install_service_linux; else install_service_freebsd; fi
   service_ctl start >/dev/null 2>&1 || true
   sleep 1
@@ -265,6 +318,10 @@ do_install() {
     say "Upgraded and restarted."
   else
     say "Traffic Monitor is running."
+  fi
+  if [ "$GUI_INSTALLED" = yes ]; then
+    if [ "$PLATFORM" = pfsense ]; then echo "    In pfSense: Status → Traffic Monitor (dashboard and settings)"
+    else echo "    In OPNsense: Reporting → Traffic Monitor (dashboard and settings)"; fi
   fi
   echo "    Dashboard:  http://$ip:$port"
   if [ -n "$NEW_PASSWORD" ]; then
@@ -313,6 +370,7 @@ do_uninstall() {
     rm -f "$UNIT"; systemctl daemon-reload
   else
     rm -f "$RC" /etc/rc.conf.d/traffic_monitor /usr/local/etc/rc.syshook.d/start/90-traffic-monitor
+    remove_gui
   fi
   rm -f "$BIN"
   if [ "${PURGE:-0}" = 1 ]; then

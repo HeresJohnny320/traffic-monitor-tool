@@ -102,9 +102,12 @@ The installer:
 - downloads the release and **verifies its SHA-256 checksum**;
 - installs `/usr/local/bin/traffic-monitor`, runs it as an unprivileged user `trafficmon`, and starts it at boot (logs go to *Status → System Logs*);
 - writes `/usr/local/etc/traffic-monitor/traffic-monitor.yaml` with a **random admin password** (printed at the end) and NetFlow listening on **127.0.0.1 only**;
+- adds Traffic Monitor to the firewall's own web UI: **pfSense → Status → Traffic Monitor**, **OPNsense → Reporting → Traffic Monitor**. The full dashboard and its Settings open there, behind the firewall's login;
 - prints the dashboard address and the two clicks needed on the firewall (next section).
 
-Then open **`http://<firewall-LAN-IP>:8080`**.
+Open it from the firewall's menu, or directly at **`http://<firewall-LAN-IP>:8080`** (with the printed password).
+
+> **Inside the firewall's web UI**, a small page (`/usr/local/www/traffic_monitor.php`) checks your firewall login and passes requests to the Traffic Monitor service, using a secret in `/usr/local/etc/traffic-monitor/gui-token`. Admins see it automatically; to give other users access, assign the privilege *WebCfg - Status: Traffic Monitor* (pfSense) or *Reporting: Traffic Monitor* (OPNsense). Re-run the installer after a firewall upgrade if the menu entry disappears.
 
 > It runs fine on the firewall (≈20 MB RAM, negligible CPU). The default LAN rule allows the dashboard from LAN; never open the port on WAN. To keep the firewall untouched, install it on another machine instead.
 
@@ -121,10 +124,11 @@ Same as above, with a hardened systemd service (`journalctl -u traffic-monitor -
 Download the archive for your platform from [Releases](https://github.com/heresjohnny320/traffic-monitor-tool/releases), extract it and run:
 
 ```sh
-./traffic-monitor all            # then open http://localhost:8080
+./traffic-monitor all            # macOS / Linux, then open http://localhost:8080
+traffic-monitor.exe all          # Windows (Command Prompt or PowerShell)
 ```
 
-No config file is needed; it's created when you save settings. Other commands: `traffic-monitor version`, and `collector` / `web` to run the two halves separately (with storage on).
+No config file is needed; it's created when you save settings. If port 8080 is already taken, the first start uses the next free port (8081, 8082, …), saves it to `traffic-monitor.yaml`, and logs the address; change it any time under *Settings → Dashboard & security*. The installer does the same for new installs. On these systems Traffic Monitor runs only while that window is open; it isn't installed as a service. Other commands: `traffic-monitor version`, and `collector` / `web` to run the two halves separately (with storage on).
 
 ## Set up the firewall
 
@@ -362,7 +366,7 @@ go run ./cmd/fakeflow -to 127.0.0.1:2055   # synthetic NetFlow for trying the UI
 go run . all                                # dashboard on :8080
 ```
 
-Layout: `internal/netflow` (v5/v9/IPFIX decoder), `internal/collector` (aggregation, SNMP), `internal/live` (in-memory state), `internal/store` (SQLite/Postgres), `internal/snapshot` (shared view), `internal/web` (dashboard, settings, API, metrics; static UI embedded, no external scripts), `internal/hass` (MQTT discovery), `install.sh`.
+Layout: `internal/netflow` (v5/v9/IPFIX decoder), `internal/collector` (aggregation, SNMP), `internal/live` (in-memory state), `internal/store` (SQLite/Postgres), `internal/snapshot` (shared view), `internal/web` (dashboard, settings, API, metrics; static UI embedded, no external scripts), `internal/hass` (MQTT discovery), `gui/` (pfSense/OPNsense web UI pages), `install.sh`.
 
-**CI** (`.github/workflows/ci.yml`) runs on every push/PR: gofmt, vet, race tests, 60 s fuzzing, govulncheck, shellcheck, JS syntax, and builds for FreeBSD amd64/arm64/armv7 (pfSense/OPNsense), Linux amd64/arm64/armv7, macOS and Windows (downloadable from the run).
+**CI** (`.github/workflows/ci.yml`) runs on every pull request: gofmt, vet, race tests, 60 s fuzzing, govulncheck, shellcheck, JS syntax, and builds for FreeBSD amd64/arm64/armv7 (pfSense/OPNsense), Linux amd64/arm64/armv7, macOS and Windows (downloadable from the run).
 **Releases**: every push to `main` (except docs-only changes) runs `.github/workflows/release.yml`, which tests, builds, and publishes the next version (v1.0, v1.1, … v1.9, v2.0, …) with archives, `SHA256SUMS` and `install.sh` with this repository filled in.

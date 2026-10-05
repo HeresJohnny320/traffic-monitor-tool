@@ -1,6 +1,8 @@
 // Settings tab: edits traffic-monitor.yaml through /api/settings. The model is the
 // same structure (and key names) as the YAML file.
 
+import { apiURL, changeHeaders, embedded } from "./embed.js";
+
 function h(tag, props = {}, ...kids) {
   const n = document.createElement(tag);
   for (const [k, v] of Object.entries(props)) {
@@ -43,7 +45,7 @@ function dirty() { return serialize() !== orig; }
 
 export async function loadSettings(container) {
   root = container;
-  const r = await fetch("api/settings");
+  const r = await fetch(apiURL("settings"));
   if (!r.ok) { root.replaceChildren(h("div", { class: "card" }, "Could not load settings: " + r.status)); return; }
   S = await r.json();
   readonly = S.mode !== "edit";
@@ -287,14 +289,15 @@ async function save() {
   document.getElementById("savebar").classList.remove("error");
   showMsg("Saving…");
   try {
-    const r = await fetch("api/settings", { method: "PUT", headers: { "Content-Type": "application/json", "X-Traffic-Monitor": "1" }, body: JSON.stringify({ config: cfg }) });
+    const r = await fetch(apiURL("settings"), { method: "PUT", headers: changeHeaders, body: JSON.stringify({ config: cfg }) });
     const body = await r.text();
     if (!r.ok) throw new Error(body.trim() || r.statusText);
     const res = JSON.parse(body);
     showMsg("Saved. Applying…");
     const port = (res.listen || "").split(":").pop();
     if (!res.ui) { showMsg("Saved. The dashboard is now off."); return; }
-    if (port && port !== (location.port || (location.protocol === "https:" ? "443" : "80"))) {
+    // inside the firewall's web UI the proxy page follows the new port itself
+    if (!embedded && port && port !== (location.port || (location.protocol === "https:" ? "443" : "80"))) {
       setTimeout(() => { location.href = `${location.protocol}//${location.hostname}:${port}/#settings`; }, 2500);
       return;
     }
@@ -312,7 +315,7 @@ async function save() {
 async function waitForRestart() {
   await new Promise(r => setTimeout(r, 1200));
   for (let i = 0; i < 40; i++) {
-    try { const r = await fetch("api/status", { cache: "no-store" }); if (r.ok || r.status === 401) return; } catch {}
+    try { const r = await fetch(apiURL("status"), { cache: "no-store" }); if (r.ok || r.status === 401) return; } catch {}
     await new Promise(r => setTimeout(r, 500));
   }
 }

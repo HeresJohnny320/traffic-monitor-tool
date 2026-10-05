@@ -1,0 +1,6 @@
+<!-- Reporting → Traffic Monitor. Installed by Traffic Monitor's install.sh. -->
+<menu>
+    <Reporting>
+        <TrafficMonitor VisibleName="Traffic Monitor" url="/ui/trafficmonitor/" order="100"/>
+    </Reporting>
+</menu>

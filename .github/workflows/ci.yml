@@ -46,6 +46,11 @@ jobs:
       - name: Lint install.sh (shellcheck, POSIX sh)
         run: shellcheck -s sh install.sh
 
+      - name: Firewall web UI pages (PHP syntax, XML)
+        run: |
+          for f in gui/*.php gui/*/*.php gui/*/*.inc; do php -l "$f"; done
+          for f in gui/*/*.xml; do php -r '$x = new DOMDocument(); exit($x->load($argv[1]) ? 0 : 1);' "$f"; done
+
   build:
     needs: test
     runs-on: ubuntu-latest

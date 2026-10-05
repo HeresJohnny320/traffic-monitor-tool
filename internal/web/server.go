@@ -39,6 +39,10 @@ type Options struct {
 	Cmd        string
 	Reload     func()
 	Version    string
+
+	// GUIToken is the secret the firewall's proxy page sends (see gui.go);
+	// empty = the dashboard can't be shown inside the firewall's web UI.
+	GUIToken string
 }
 
 type Server struct {
@@ -70,14 +74,14 @@ func (s *Server) Handler() http.Handler {
 		root.Handle("/api/v1/", v1)
 		root.Handle("/metrics", v1)
 	}
-	return s.guardHost(securityHeaders(root))
+	return s.guardHost(s.securityHeaders(root))
 }
 
 func (s *Server) ui() http.Handler {
 	mux := http.NewServeMux()
 	db := s.requireDB
 	sub, _ := fs.Sub(static, "static")
-	mux.Handle("GET /", http.FileServerFS(sub))
+	mux.Handle("GET /", s.staticFiles(sub))
 	mux.HandleFunc("GET /api/status", s.status)
 	mux.HandleFunc("GET /api/live", s.liveHandler)
 	mux.HandleFunc("GET /api/top", db(s.top))
@@ -112,6 +116,10 @@ func (s *Server) auth(next http.Handler) http.Handler {
 		return next
 	}
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if s.fromGUI(r) { // the firewall's proxy page has checked the firewall login
+			next.ServeHTTP(w, r)
+			return
+		}
 		u, p, ok := r.BasicAuth()
 		if !ok || subtle.ConstantTimeCompare([]byte(u), []byte(user)) != 1 ||
 			subtle.ConstantTimeCompare([]byte(p), []byte(pass)) != 1 {
@@ -144,13 +152,18 @@ func writeJSON(w http.ResponseWriter, v any, err error) {
 var errBadRequest = errors.New("bad request")
 
 // securityHeaders: no framing (clickjacking), no MIME sniffing, no referrers.
-func securityHeaders(next http.Handler) http.Handler {
+// Through the firewall's proxy page, the firewall's own pages may frame it.
+func (s *Server) securityHeaders(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		frame, ancestors := "DENY", "'none'"
+		if s.fromGUI(r) {
+			frame, ancestors = "SAMEORIGIN", "'self'"
+		}
 		h := w.Header()
 		h.Set("X-Content-Type-Options", "nosniff")
-		h.Set("X-Frame-Options", "DENY")
+		h.Set("X-Frame-Options", frame)
 		h.Set("Referrer-Policy", "no-referrer")
-		h.Set("Content-Security-Policy", "default-src 'self'; img-src 'self' data:; style-src 'self'; script-src 'self'; frame-ancestors 'none'")
+		h.Set("Content-Security-Policy", "default-src 'self'; img-src 'self' data:; style-src 'self'; script-src 'self'; frame-ancestors "+ancestors)
 		next.ServeHTTP(w, r)
 	})
 }

@@ -16,9 +16,13 @@ import (
 	"flag"
 	"fmt"
 	"log"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
+	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"syscall"
@@ -58,6 +62,9 @@ func main() {
 	}
 	if _, err := os.Stat(*cfgPath); err != nil {
 		log.Printf("config: %s not found, starting with defaults (configure in the dashboard's Settings tab)", *cfgPath)
+		if cmd != "collector" {
+			freeWebPort(cfg, *cfgPath)
+		}
 	}
 	if err := cfg.CheckOutputs(cmd); err != nil {
 		log.Fatal(err)
@@ -140,6 +147,7 @@ func run(parent context.Context, cmd, cfgPath string, cfg *config.Config, state 
 		opts := web.Options{
 			UI: cfg.Web.UI, User: cfg.Web.Username, Pass: cfg.Web.Password, API: cfg.API,
 			Config: cfg, ConfigPath: cfgPath, Cmd: cmd, Reload: reload, Version: version,
+			GUIToken: guiToken(cfgPath),
 		}
 		srv := &http.Server{
 			Addr: cfg.Web.Listen, Handler: web.New(db, src, opts).Handler(),
@@ -167,6 +175,50 @@ func run(parent context.Context, cmd, cfgPath string, cfg *config.Config, state 
 		return err
 	}
 	return nil
+}
+
+// freeWebPort is for a first run without a config file: if the dashboard's
+// port (8080) is taken, it uses the next free one (8081, 8082, ...) and saves
+// it to the config file so it stays the same. Change it under Settings.
+func freeWebPort(cfg *config.Config, cfgPath string) {
+	host, portStr, err := net.SplitHostPort(cfg.Web.Listen)
+	port, perr := strconv.Atoi(portStr)
+	if err != nil || perr != nil {
+		return
+	}
+	for p := port; p < port+20; p++ {
+		addr := net.JoinHostPort(host, strconv.Itoa(p))
+		l, err := net.Listen("tcp", addr)
+		if err != nil {
+			continue
+		}
+		l.Close()
+		if p == port {
+			return
+		}
+		cfg.Web.Listen = addr
+		log.Printf("web: port %d is in use, using %d instead", port, p)
+		if err := config.Save(cfgPath, cfg); err != nil {
+			log.Printf("config: saving %s: %v (the port may change on the next start)", cfgPath, err)
+		}
+		return
+	}
+}
+
+// guiToken reads the secret shared with the firewall's proxy page (installed
+// by install.sh on pfSense/OPNsense) from gui-token next to the config file.
+// No file = the dashboard isn't offered inside the firewall's web UI.
+func guiToken(cfgPath string) string {
+	b, err := os.ReadFile(filepath.Join(filepath.Dir(cfgPath), "gui-token"))
+	if err != nil {
+		return ""
+	}
+	t := strings.TrimSpace(string(b))
+	if len(t) < 16 {
+		log.Printf("web: ignoring gui-token: too short")
+		return ""
+	}
+	return t
 }
 
 func usage() {
