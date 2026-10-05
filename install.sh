@@ -8,7 +8,8 @@
 #
 #   sh install.sh [install|uninstall|status]
 #
-# Re-running install upgrades the binary and keeps your settings.
+# Re-running install stops any running Traffic Monitor (service or leftover
+# process), upgrades the binary, keeps your settings and starts it again.
 # Options (environment variables):
 #   VERSION=v1.2     install a specific release instead of the latest
 #   PORT=8080        dashboard port for a new install
@@ -84,6 +85,31 @@ random_secret() { od -An -N18 -tx1 /dev/urandom | tr -d ' \n'; }
 service_ctl() { # start|stop|restart|status
   if [ "$OS" = linux ]; then systemctl "$1" traffic-monitor
   else "$RC" "$1"; fi
+}
+
+# tm_running reports whether any Traffic Monitor process is running.
+tm_running() { pgrep -x traffic-monitor >/dev/null 2>&1; }
+
+# stop_old stops every running copy before the binary is replaced and the
+# ports are checked: the service, its daemon(8) supervisor (which would
+# restart it), and leftovers started by hand or by an older installer.
+stop_old() {
+  if [ -f "$RC" ] || [ -f "$UNIT" ]; then
+    if service_ctl status >/dev/null 2>&1; then running=yes; fi
+    service_ctl stop >/dev/null 2>&1 || true
+  fi
+  pkill -f '^(/usr/sbin/)?daemon:? .*traffic-monitor' 2>/dev/null || true
+  if ! tm_running; then return; fi
+  running=yes
+  say "Stopping the running Traffic Monitor"
+  pkill -x traffic-monitor 2>/dev/null || true
+  i=0
+  while tm_running && [ "$i" -lt 10 ]; do sleep 1; i=$((i + 1)); done
+  if tm_running; then
+    pkill -9 -x traffic-monitor 2>/dev/null || true
+    sleep 1
+  fi
+  if tm_running; then die "could not stop the running Traffic Monitor (pid $(pgrep -x traffic-monitor | tr '\n' ' '))"; fi
 }
 
 # ---------------------------------------------------------------- install
@@ -294,7 +320,7 @@ do_install() {
   say "Installing Traffic Monitor on $PLATFORM ($OS/$ARCH)"
   mkdir -p "$CONF_DIR" "$DATA_DIR"
   running=no
-  if [ -f "$BIN" ] && service_ctl status >/dev/null 2>&1; then running=yes; service_ctl stop >/dev/null 2>&1 || true; fi
+  stop_old
   install_binary
   create_user
   NEW_PASSWORD=""
