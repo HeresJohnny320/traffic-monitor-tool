@@ -32,13 +32,18 @@ export function chart(container, opts) {
   if (!container._ro) {
     container._ro = new ResizeObserver(() => container._draw && container._draw());
     container._ro.observe(container);
+    window.addEventListener("resize", () => container._draw && container._draw()); // height follows the window
   }
   container._draw = draw;
 }
 
+// Chart heights are designed for a ~900px tall window and scale with it, so
+// a short laptop screen (or the firewall's framed page) still shows the tables.
+const heightScale = () => Math.min(1.25, Math.max(0.6, window.innerHeight / 900));
+
 function render(box, o) {
   const W = Math.max(box.clientWidth, 280);
-  const H = o.height || 260;
+  const H = Math.round((o.height || 260) * heightScale());
   const m = { t: 12, r: 12, b: 26, l: 64 };
   const iw = W - m.l - m.r, ih = H - m.t - m.b;
   box.replaceChildren();

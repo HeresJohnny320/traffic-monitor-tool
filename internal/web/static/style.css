@@ -61,7 +61,7 @@ h3 { font-size: 14px; margin: 0; font-weight: 600; }
 .tabs button:hover, .ghost:hover { background: var(--surface-2); }
 .tabs button.on { background: var(--surface-2); color: var(--text); font-weight: 600; }
 
-main { padding: 16px 24px 48px; max-width: 1500px; margin: 0 auto; display: flex; flex-direction: column; gap: 16px; }
+main { padding: 16px 24px 48px; max-width: 2000px; margin: 0 auto; display: flex; flex-direction: column; gap: 16px; }
 
 .view { display: flex; flex-direction: column; gap: 16px; }
 .filters { display: flex; flex-wrap: wrap; align-items: center; gap: 12px 16px; color: var(--text-2); }
@@ -156,8 +156,13 @@ select, input[type=date], .search, .rename input {
 .rename { display: flex; gap: 8px; }
 .rename input { flex: 1; min-width: 0; }
 
-@media (max-width: 1000px) {
+/* wide tables scroll sideways inside their card instead of squeezing */
+.card:has(.tbl) { overflow-x: auto; }
+/* side-by-side cards stack once each would be too narrow for its table */
+@media (max-width: 1150px) {
   .grid2, .grid2.wide-left { grid-template-columns: minmax(0, 1fr); }
+}
+@media (max-width: 1000px) {
   .tiles { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }
 @media (max-width: 600px) {
