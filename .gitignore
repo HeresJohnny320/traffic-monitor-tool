@@ -1,0 +1,13 @@
+# binaries
+/traffic-monitor
+/traffic-monitor.exe
+/fakeflow
+/dist/
+/build/
+/release/
+
+# local data and settings (may contain passwords)
+*.db
+*.db-*
+/traffic-monitor.yaml
+/traffic-monitor.yaml.bak

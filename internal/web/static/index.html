@@ -1,0 +1,154 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Traffic Monitor</title>
+<link rel="stylesheet" href="style.css">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><path d='M1 12h3V8H1zm5 0h3V4H6zm5 0h3V1h-3z' fill='%232a78d6'/></svg>">
+</head>
+<body>
+<header class="top">
+  <div class="brand">Traffic Monitor <span id="status" class="status" title="Collector status">●</span>
+    <span id="mode" class="badge" title="database.enabled is false: nothing is stored, history views are off" hidden>Live only</span></div>
+  <nav class="tabs" role="tablist">
+    <button data-tab="live" class="on">Live</button>
+    <button data-tab="history">History</button>
+    <button data-tab="ifaces">Interfaces</button>
+    <button data-tab="devices">Devices</button>
+    <button data-tab="settings">Settings</button>
+  </nav>
+  <button id="theme" class="ghost" title="Toggle theme">◐</button>
+</header>
+
+<main>
+  <!-- filters: one row, scopes everything below -->
+  <section id="filters" class="filters">
+    <div class="seg" id="ranges">
+      <button data-r="today" class="on">Today</button>
+      <button data-r="yesterday">Yesterday</button>
+      <button data-r="24h">24h</button>
+      <button data-r="7d">7 days</button>
+      <button data-r="30d">30 days</button>
+      <button data-r="month">This month</button>
+      <button data-r="lastmonth">Last month</button>
+      <button data-r="year">This year</button>
+      <button data-r="custom">Custom…</button>
+    </div>
+    <span id="custom" class="custom" hidden>
+      <input type="date" id="cfrom"> – <input type="date" id="cto">
+      <button id="capply">Apply</button>
+    </span>
+    <label>Group by
+      <select id="step">
+        <option value="auto">Auto</option><option value="minute">Minute</option><option value="5min">5 min</option>
+        <option value="15min">15 min</option><option value="hour">Hour</option><option value="day">Day</option>
+        <option value="week">Week</option><option value="month">Month</option>
+      </select>
+    </label>
+    <label>Network <select id="network"><option value="">All networks</option></select></label>
+  </section>
+
+  <!-- LIVE -->
+  <section data-view="live" class="view">
+    <div id="welcome" class="banner welcome" hidden></div>
+    <div class="tiles">
+      <div class="tile"><div class="tl">WAN download</div><div class="tv" id="l-down">–</div><div class="ts" id="l-down-s"></div></div>
+      <div class="tile"><div class="tl">WAN upload</div><div class="tv" id="l-up">–</div><div class="ts" id="l-up-s"></div></div>
+      <div class="tile"><div class="tl">Active devices</div><div class="tv" id="l-hosts">–</div><div class="ts">sending or receiving now</div></div>
+      <div class="tile"><div class="tl">Top device now</div><div class="tv sm" id="l-top">–</div><div class="ts" id="l-top-s"></div></div>
+    </div>
+    <div class="card">
+      <div class="card-h"><h2>Internet throughput</h2><div class="legend"><span class="lk dl"></span>Download <span class="lk ul"></span>Upload</div></div>
+      <div id="live-chart"></div>
+    </div>
+    <div class="grid2">
+      <div class="card">
+        <div class="card-h"><h2>Interfaces</h2><span class="hint">WAN · LAN · VLAN · VPN, from SNMP</span></div>
+        <table class="tbl" id="live-ifaces"></table>
+      </div>
+      <div class="card">
+        <div class="card-h"><h2>Devices right now</h2><span class="hint" id="live-hint"></span></div>
+        <table class="tbl sortable" id="live-hosts"></table>
+      </div>
+    </div>
+  </section>
+
+  <!-- HISTORY -->
+  <section data-view="history" class="view" hidden>
+    <div class="tiles">
+      <div class="tile"><div class="tl">Downloaded</div><div class="tv" id="h-down">–</div></div>
+      <div class="tile"><div class="tl">Uploaded</div><div class="tv" id="h-up">–</div></div>
+      <div class="tile"><div class="tl">Local / inter-VLAN</div><div class="tv" id="h-lan">–</div></div>
+      <div class="tile"><div class="tl">Devices</div><div class="tv" id="h-n">–</div><div class="ts" id="h-n-s"></div></div>
+    </div>
+    <div class="card">
+      <div class="card-h"><h2 id="h-title">Internet usage</h2><div class="legend"><span class="lk dl"></span>Download <span class="lk ul"></span>Upload</div></div>
+      <div id="hist-chart"></div>
+    </div>
+    <div class="grid2 wide-left">
+      <div class="card">
+        <div class="card-h"><h2>Top devices</h2><input id="h-search" class="search" placeholder="Filter by name or IP"></div>
+        <table class="tbl sortable clickable" id="hist-hosts"></table>
+      </div>
+      <div class="card">
+        <div class="card-h"><h2>Top destinations</h2><span class="hint">whole network</span></div>
+        <table class="tbl" id="hist-peers"></table>
+      </div>
+    </div>
+  </section>
+
+  <!-- INTERFACES -->
+  <section data-view="ifaces" class="view" hidden>
+    <div class="card">
+      <div class="card-h"><h2 id="if-title">All interfaces</h2><div class="legend"><span class="lk dl"></span>In <span class="lk ul"></span>Out</div></div>
+      <div id="if-chart"></div>
+    </div>
+    <div class="card">
+      <div class="card-h"><h2>Interface totals</h2><span class="hint">click a row to chart it · In/Out are from the firewall's point of view (WAN in = download)</span></div>
+      <table class="tbl sortable clickable" id="if-table"></table>
+    </div>
+  </section>
+
+  <!-- DEVICES -->
+  <section data-view="devices" class="view" hidden>
+    <div class="card">
+      <div class="card-h"><h2>All devices</h2><input id="d-search" class="search" placeholder="Filter by name, IP or network"></div>
+      <table class="tbl sortable clickable" id="dev-table"></table>
+    </div>
+  </section>
+
+
+  <!-- SETTINGS -->
+  <section data-view="settings" class="view" hidden></section>
+</main>
+
+<!-- device drawer -->
+<aside id="drawer" class="drawer" hidden>
+  <div class="drawer-h">
+    <div>
+      <h2 id="dr-name"></h2>
+      <div class="hint" id="dr-sub"></div>
+    </div>
+    <button class="ghost" id="dr-close" title="Close">✕</button>
+  </div>
+  <div class="rename"><input id="dr-rename" placeholder="Give this device a name"><button id="dr-save">Save name</button></div>
+  <div class="tiles three">
+    <div class="tile"><div class="tl">Downloaded</div><div class="tv" id="dr-down">–</div></div>
+    <div class="tile"><div class="tl">Uploaded</div><div class="tv" id="dr-up">–</div></div>
+    <div class="tile"><div class="tl">Local</div><div class="tv" id="dr-lan">–</div></div>
+  </div>
+  <div class="card flat">
+    <div class="card-h"><h3>Usage over time</h3><div class="legend"><span class="lk dl"></span>Download <span class="lk ul"></span>Upload</div></div>
+    <div id="dr-chart"></div>
+  </div>
+  <div class="card flat">
+    <div class="card-h"><h3>Talking to</h3></div>
+    <table class="tbl" id="dr-peers"></table>
+  </div>
+</aside>
+<div id="scrim" class="scrim" hidden></div>
+
+<script type="module" src="app.js"></script>
+</body>
+</html>

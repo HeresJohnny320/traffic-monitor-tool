@@ -1,0 +1,69 @@
+name: Release
+
+# Push a tag like v1.0.0 to publish a GitHub release with binaries for every
+# platform, SHA256SUMS, and install.sh (with this repository filled in).
+#
+#   git tag v1.0.0 && git push origin v1.0.0
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write # create the release
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - run: go vet ./...
+      - run: go test -race -count=1 ./...
+      - run: go run golang.org/x/vuln/cmd/govulncheck@latest ./...
+      - run: shellcheck -s sh install.sh
+
+  release:
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Build all platforms
+        env:
+          CGO_ENABLED: "0"
+          GOARM: "7"
+          VERSION: ${{ github.ref_name }}
+        run: |
+          set -eu
+          mkdir -p release
+          for target in freebsd/amd64 freebsd/arm64 freebsd/arm linux/amd64 linux/arm64 linux/arm darwin/arm64 darwin/amd64 windows/amd64; do
+            os=${target%/*}; arch=${target#*/}
+            dir="build/${os}_${arch}"; mkdir -p "$dir"
+            ext=""; [ "$os" = windows ] && ext=.exe
+            GOOS=$os GOARCH=$arch go build -trimpath -ldflags "-s -w -X main.version=$VERSION" -o "$dir/traffic-monitor$ext" .
+            cp README.md traffic-monitor.example.yaml "$dir/"
+            name="traffic-monitor_${os}_${arch}"
+            if [ "$os" = windows ]; then (cd "$dir" && zip -q "../../release/$name.zip" ./*)
+            else tar -czf "release/$name.tar.gz" -C "$dir" .; fi
+          done
+
+      - name: Installer with this repository filled in
+        run: sed "s#OWNER/traffic-monitor#${GITHUB_REPOSITORY}#g" install.sh > release/install.sh
+
+      - name: Checksums
+        run: cd release && sha256sum ./* | sed 's#\./##' > SHA256SUMS && cat SHA256SUMS
+
+      - name: Smoke test the Linux build
+        run: |
+          tar -xzf release/traffic-monitor_linux_amd64.tar.gz -C /tmp traffic-monitor
+          /tmp/traffic-monitor version | grep -q "${{ github.ref_name }}"
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: release/*
+          generate_release_notes: true

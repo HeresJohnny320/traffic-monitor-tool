@@ -1,0 +1,137 @@
+# traffic-monitor configuration reference. You don't need this file: Traffic Monitor starts
+# with defaults and everything here can be set in the dashboard's Settings tab,
+# which writes traffic-monitor.yaml for you. Copy and edit by hand if you prefer.
+
+database:
+  # OFF by default = live-only mode: nothing is stored anywhere. The dashboard
+  # shows only the Live view; the API/MQTT serve live rates and counters since
+  # midnight from memory. Run as `traffic-monitor all`.
+  #
+  # Set to true to keep history (days/weeks/months/years, top destinations).
+  # The default is a local SQLite file: no server, nothing to install.
+  enabled: false
+  driver: sqlite        # sqlite (local file) or postgres
+  dsn: traffic-monitor.db      # path of the SQLite file
+  # driver: postgres
+  # dsn: postgres://traffic-monitor:secret@db-host:5432/traffic-monitor?sslmode=disable
+
+netflow:
+  # UDP port the firewall exports NetFlow v5/v9/IPFIX to
+  listen: ":2055"
+  # Seconds used to average "live" per-device rates. Set it to the exporter's
+  # active-flow timeout (60s recommended on pfSense softflowd / OPNsense).
+  live_window: 60
+  # Only accept flows from these IPs/subnets (your firewall). Empty = anyone who
+  # can reach the port, which lets others on the network inject fake traffic.
+  allowed_exporters: []      # e.g. [192.168.1.1]
+
+snmp:
+  # Interface totals (WAN in/out, LAN, VLANs, OpenVPN/WireGuard/IPsec).
+  # pfSense: Services > SNMP (enable, "MibII" module, set community)
+  # OPNsense: install os-net-snmp, Services > Net-SNMP
+  enabled: false
+  target: 192.168.1.1
+  port: 161
+  community: public
+  version: 2c
+  interval: 5s
+  only_listed: false   # true = only poll interfaces listed below
+
+# Your local subnets. A flow with one side inside these and the other outside
+# is internet traffic; both sides inside = local / inter-VLAN / VPN traffic.
+# Every IP seen in these ranges shows up as a device.
+networks:
+  - name: LAN
+    kind: lan
+    cidr: [192.168.1.0/24]
+  - name: IoT
+    kind: vlan
+    cidr: [192.168.20.0/24]
+  - name: Guest
+    kind: vlan
+    cidr: [192.168.30.0/24]
+  - name: WireGuard
+    kind: vpn
+    cidr: [10.6.0.0/24]
+  # - name: OpenVPN
+  #   kind: vpn
+  #   cidr: [10.8.0.0/24]
+  # - name: LAN v6
+  #   kind: lan
+  #   cidr: ["2001:db8:1234:1::/64"]
+
+# Friendly labels/types for firewall interfaces (SNMP ifName). Anything not
+# listed is auto-detected: "igb1.20"/"vlan0.20" -> vlan, ovpn*/wg*/tun*/enc0 -> vpn.
+# Mark your WAN(s) with kind: wan so the dashboard knows "internet in/out".
+interfaces:
+  igb0:   { label: WAN,  kind: wan }
+  igb1:   { label: LAN,  kind: lan }
+  igb1.20: { label: IoT,  kind: vlan }
+  igb1.30: { label: Guest, kind: vlan }
+  wg0:    { label: WireGuard, kind: vpn }
+  # pppoe0: { label: WAN (PPPoE), kind: wan }
+
+# Static names (otherwise reverse DNS is used; names can also be set in the UI)
+hosts:
+  192.168.1.10: Gaming PC
+  192.168.1.50: Living room TV
+
+reverse_dns: false   # look up device names via your DNS server (e.g. pfSense DNS Resolver)
+
+retention:
+  minute_days: 14   # 1-minute resolution
+  hour_days: 0      # 1-hour resolution, 0 = keep forever (days/weeks/months/years come from this)
+  peer_days: 30     # per-device destinations
+
+web:
+  listen: ":8080"
+  # false = don't serve the dashboard, only the API below (headless)
+  ui: true
+  # false = the Settings page is read-only (lock configuration to this file)
+  settings: true
+  # Extra host names allowed in the browser address bar (needed only for a
+  # public domain, e.g. behind a reverse proxy). IPs and local names such as
+  # pfsense.home.arpa / router.lan always work. Protects against DNS rebinding.
+  allowed_hosts: []
+  # Optional basic auth for the dashboard (the API uses tokens instead)
+  username: ""
+  password: ""
+
+# Read-only integration API: /api/v1/... (JSON) and /metrics (Prometheus).
+# For Home Assistant, Node-RED, Grafana, scripts... GET only, nothing can be
+# changed through it. Served on the same port as the dashboard.
+api:
+  enabled: false
+  # Clients send "Authorization: Bearer <token>", "X-API-Key: <token>" or
+  # "?token=<token>". Leave empty to allow access without a token (LAN only!).
+  # Generate one with: openssl rand -hex 24
+  tokens: []
+  # Allow browser apps on other origins to call the API
+  cors: false
+
+# Home Assistant auto-discovery over MQTT. With the MQTT integration set up in
+# Home Assistant (e.g. the Mosquitto broker add-on), Traffic Monitor appears under
+# Settings > Devices & services > MQTT with no YAML needed on the HA side:
+#   - "Traffic Monitor": WAN download/upload, downloaded/uploaded today, active devices,
+#     top device, collector status
+#   - one device per firewall interface (WAN, LAN, VLANs, VPN): in/out + today
+#   - one device per network (LAN, IoT VLAN, WireGuard, ...): rates + today
+#   - client devices you choose (see `devices`): download/upload, today, active
+# Runs with the collector (`traffic-monitor all` or `traffic-monitor collector`); works with
+# the database on or off.
+mqtt:
+  enabled: false
+  broker: tcp://homeassistant.local:1883   # ssl://host:8883 for TLS
+  username: ""
+  password: ""
+  client_id: traffic-monitor
+  topic_prefix: traffic-monitor            # state topics: traffic-monitor/state, traffic-monitor/device/..., ...
+  discovery_prefix: homeassistant   # Home Assistant's default
+  interval: 10s
+  tls_insecure: false
+  interfaces: true                  # a device per firewall interface
+  networks: true                    # a device per network
+  # Client devices: named = only those listed under `hosts:` or renamed in the
+  # dashboard; all = every device seen (can be many with IPv6); none
+  devices: named
+  device_list: []                   # extra IPs or names to always include

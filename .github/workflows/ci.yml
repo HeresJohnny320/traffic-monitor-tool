@@ -1,0 +1,85 @@
+name: CI
+
+# Every push and pull request: lint, test, security scans, and a build for
+# every platform (pfSense/OPNsense = FreeBSD). Binaries are attached to the run.
+on:
+  push:
+    branches: ["**"]
+    tags-ignore: ["v*"] # tags are handled by release.yml
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: gofmt
+        run: |
+          out=$(gofmt -l .)
+          if [ -n "$out" ]; then echo "not gofmt'ed:"; echo "$out"; exit 1; fi
+
+      - name: go vet
+        run: go vet ./...
+
+      - name: Tests (race detector)
+        run: go test -race -count=1 ./...
+
+      - name: Fuzz the NetFlow decoder (60s)
+        run: go test ./internal/netflow -run '^$' -fuzz=FuzzDecode -fuzztime=60s
+
+      - name: Known vulnerabilities (govulncheck)
+        run: go run golang.org/x/vuln/cmd/govulncheck@latest ./...
+
+      - name: Dashboard JavaScript syntax
+        run: |
+          for f in internal/web/static/*.js; do
+            cp "$f" "/tmp/$(basename "$f" .js).mjs"
+            node --check "/tmp/$(basename "$f" .js).mjs"
+          done
+
+      - name: Lint install.sh (shellcheck, POSIX sh)
+        run: shellcheck -s sh install.sh
+
+  build:
+    needs: test
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { goos: freebsd, goarch: amd64 } # pfSense CE/Plus, OPNsense (most hardware)
+          - { goos: freebsd, goarch: arm64 } # Netgate 1100/2100, OPNsense on ARM
+          - { goos: freebsd, goarch: arm }   # Netgate SG-3100 (armv7)
+          - { goos: linux, goarch: amd64 }
+          - { goos: linux, goarch: arm64 }   # Raspberry Pi 4/5, ARM servers
+          - { goos: linux, goarch: arm }     # Raspberry Pi 2/3 (armv7)
+          - { goos: darwin, goarch: arm64 }
+          - { goos: darwin, goarch: amd64 }
+          - { goos: windows, goarch: amd64 }
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: Build ${{ matrix.goos }}/${{ matrix.goarch }}
+        env:
+          CGO_ENABLED: "0"
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+          GOARM: "7"
+        run: |
+          ext=""; [ "$GOOS" = windows ] && ext=.exe
+          go build -trimpath -ldflags "-s -w -X main.version=${GITHUB_SHA::7}" -o "dist/traffic-monitor$ext" .
+          ls -la dist
+      - uses: actions/upload-artifact@v4
+        with:
+          name: traffic-monitor_${{ matrix.goos }}_${{ matrix.goarch }}
+          path: dist/
+          retention-days: 14
