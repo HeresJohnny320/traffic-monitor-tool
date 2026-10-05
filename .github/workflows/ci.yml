@@ -78,7 +78,7 @@ jobs:
           ext=""; [ "$GOOS" = windows ] && ext=.exe
           go build -trimpath -ldflags "-s -w -X main.version=${GITHUB_SHA::7}" -o "dist/traffic-monitor$ext" .
           ls -la dist
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: traffic-monitor_${{ matrix.goos }}_${{ matrix.goarch }}
           path: dist/
