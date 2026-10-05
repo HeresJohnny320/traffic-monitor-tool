@@ -39,8 +39,7 @@ require_once("guiconfig.inc");
 $tm_csrf = isset($_SESSION['$PHALCON/CSRF$']) ? (string)$_SESSION['$PHALCON/CSRF$'] : "";
 session_write_close(); // don't hold the session lock while the dashboard polls
 
-define("TM_DIR", "/usr/local/etc/traffic-monitor");
-define("TM_BASE", "/traffic_monitor.php?p=");
+require_once("/usr/local/share/traffic-monitor/traffic_monitor.inc");
 
 function tm_fail($code, $msg)
 {
@@ -48,43 +47,6 @@ function tm_fail($code, $msg)
 	header("Content-Type: text/plain; charset=utf-8");
 	echo $msg, "\n";
 	exit;
-}
-
-// tm_target is http://host:port of the service, from web.listen in its settings.
-function tm_target()
-{
-	$host = "127.0.0.1";
-	$port = "8080";
-	$inweb = false;
-	$lines = @file(TM_DIR . "/traffic-monitor.yaml");
-	foreach ($lines ? $lines : array() as $line) {
-		if (preg_match('/^[^\s#]/', $line)) {
-			$inweb = (strncmp($line, "web:", 4) === 0);
-		} elseif ($inweb && preg_match('/^\s+listen:\s*["\']?([^"\'\s#]*)/', $line, $m)) {
-			$i = strrpos($m[1], ":");
-			if ($i !== false) {
-				$h = trim(substr($m[1], 0, $i), "[]");
-				$port = substr($m[1], $i + 1);
-				if ($h !== "" && $h !== "0.0.0.0" && $h !== "::") {
-					$host = $h;
-				}
-			}
-			break;
-		}
-	}
-	if (strpos($host, ":") !== false) {
-		$host = "[$host]";
-	}
-	return "http://$host:" . (int)$port;
-}
-
-$token = trim((string)@file_get_contents(TM_DIR . "/gui-token"));
-if ($token === "") {
-	tm_fail(503, "Traffic Monitor: " . TM_DIR . "/gui-token is missing or unreadable; re-run install.sh.");
-}
-$target = tm_target();
-if (!function_exists("curl_init")) {
-	tm_fail(500, "Traffic Monitor: PHP's curl extension is not available.");
 }
 
 // p=<path>[?query], passed through as sent (not decoded)
@@ -105,46 +67,30 @@ if ($changing && (!isset($_SERVER["HTTP_X_TRAFFIC_MONITOR"]) || $_SERVER["HTTP_X
 	tm_fail(403, "Traffic Monitor: missing X-Traffic-Monitor header");
 }
 
-$headers = array(
-	"X-Traffic-Monitor-Gui: $token",
-	"X-Traffic-Monitor-Base: " . TM_BASE,
-	"X-Traffic-Monitor-Gui-Csrf: $tm_csrf",
-	"Expect:",
-);
-if ($changing) {
-	$headers[] = "X-Traffic-Monitor: 1";
-	$headers[] = "Content-Type: application/json";
+// Settings → Import from pfSense: read the firewall's setup and send it to the service
+if ($path === "_import") {
+	$import = "/usr/local/share/traffic-monitor/pfsense_import.inc";
+	if (!file_exists($import)) {
+		tm_fail(404, "Traffic Monitor: importing is only available on pfSense.");
+	}
+	if (!$changing) {
+		tm_fail(405, "Traffic Monitor: start an import with POST (Settings → Import from pfSense).");
+	}
+	require_once($import);
+	$res = tm_pfsense_import(true);
+	http_response_code($res["ok"] ? 200 : TM_ERROR_STATUS);
+	header("Content-Type: application/json");
+	echo json_encode($res);
+	exit;
 }
 
-$resp_headers = array();
-$ch = curl_init($target . "/" . $path);
-curl_setopt_array($ch, array(
-	CURLOPT_CUSTOMREQUEST => $method,
-	CURLOPT_NOBODY => ($method === "HEAD"),
-	CURLOPT_HTTPHEADER => $headers,
-	CURLOPT_RETURNTRANSFER => true,
-	CURLOPT_FOLLOWLOCATION => false,
-	CURLOPT_CONNECTTIMEOUT => 5,
-	CURLOPT_TIMEOUT => 60,
-	CURLOPT_HEADERFUNCTION => function ($ch, $line) use (&$resp_headers) {
-		$parts = explode(":", $line, 2);
-		if (count($parts) === 2) {
-			$resp_headers[strtolower(trim($parts[0]))] = trim($parts[1]);
-		}
-		return strlen($line);
-	},
-));
-if ($changing) {
-	curl_setopt($ch, CURLOPT_POSTFIELDS, file_get_contents("php://input"));
+list($status, $resp_headers, $body) = tm_call($method, $path,
+	$changing ? file_get_contents("php://input") : null,
+	array("X-Traffic-Monitor-Gui-Csrf: $tm_csrf"));
+if ($status === 0) {
+	tm_fail(502, "Traffic Monitor: " . $body);
 }
-$body = curl_exec($ch);
-if ($body === false) {
-	tm_fail(502, "Traffic Monitor is not responding at $target (" . curl_error($ch) . ").\n" .
-		"Is the service running? Check with: service traffic_monitor.sh status (pfSense) or service traffic_monitor status (OPNsense).\n" .
-		"Its log is under Status → System Logs → General (traffic-monitor).");
-}
-http_response_code(tm_status(curl_getinfo($ch, CURLINFO_RESPONSE_CODE)));
-curl_close($ch);
+http_response_code(tm_status($status));
 
 foreach (array("content-type", "cache-control", "content-security-policy", "x-frame-options", "x-content-type-options", "referrer-policy") as $h) {
 	if (isset($resp_headers[$h])) {

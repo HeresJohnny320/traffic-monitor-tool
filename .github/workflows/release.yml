@@ -46,7 +46,7 @@ jobs:
 
       - name: Firewall web UI pages (PHP syntax, XML)
         run: |
-          for f in gui/*.php gui/*/*.php gui/*/*.inc; do php -l "$f"; done
+          for f in gui/*.php gui/*.inc gui/*/*.php gui/*/*.inc; do php -l "$f"; done
           for f in gui/*/*.xml; do php -r '$x = new DOMDocument(); exit($x->load($argv[1]) ? 0 : 1);' "$f"; done
 
   release:

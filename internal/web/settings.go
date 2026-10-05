@@ -3,8 +3,10 @@ package web
 import (
 	"encoding/json"
 	"errors"
+	"log"
 	"net"
 	"net/http"
+	"strings"
 	"time"
 
 	"gopkg.in/yaml.v3"
@@ -118,6 +120,47 @@ func (s *Server) putSettings(w http.ResponseWriter, r *http.Request) {
 	}
 	writeJSON(w, map[string]any{"ok": true, "listen": next.Web.Listen, "ui": next.Web.UI}, nil)
 	// restart after the response has gone out
+	go func() { time.Sleep(300 * time.Millisecond); s.opt.Reload() }()
+}
+
+// importFirewall merges what the firewall reports about itself (networks,
+// interfaces, device names, SNMP) into the settings. Only the firewall's own
+// proxy page may call it; it saves and restarts only when something changed.
+func (s *Server) importFirewall(w http.ResponseWriter, r *http.Request) {
+	if !s.fromGUI(r) {
+		http.Error(w, "imports come from the firewall's web UI", http.StatusForbidden)
+		return
+	}
+	if mode, reason := s.settingsMode(); mode != "edit" {
+		http.Error(w, reason, http.StatusForbidden)
+		return
+	}
+	var im config.Import
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 4<<20)).Decode(&im); err != nil {
+		http.Error(w, "bad request: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+	old := s.opt.Config
+	next, err := old.Clone()
+	if err != nil {
+		writeJSON(w, nil, err)
+		return
+	}
+	changes := next.ApplyImport(im)
+	if len(changes) == 0 {
+		writeJSON(w, map[string]any{"ok": true, "changed": false, "changes": []string{}}, nil)
+		return
+	}
+	if err := checkApply(old, next); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	if err := config.Save(s.opt.ConfigPath, next); err != nil {
+		http.Error(w, "saving "+s.opt.ConfigPath+": "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+	log.Printf("import from %s: %s", im.Source, strings.Join(changes, "; "))
+	writeJSON(w, map[string]any{"ok": true, "changed": true, "changes": changes}, nil)
 	go func() { time.Sleep(300 * time.Millisecond); s.opt.Reload() }()
 }
 

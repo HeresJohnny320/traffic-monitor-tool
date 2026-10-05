@@ -20,11 +20,14 @@ type Config struct {
 	Networks   []Network            `yaml:"networks"`
 	Interfaces map[string]Interface `yaml:"interfaces"`
 	Hosts      map[string]string    `yaml:"hosts"`
-	Retention  Retention            `yaml:"retention"`
-	ReverseDNS bool                 `yaml:"reverse_dns"`
-	Web        Web                  `yaml:"web"`
-	API        API                  `yaml:"api"`
-	MQTT       MQTT                 `yaml:"mqtt"`
+	// Device names reported by the firewall (DHCP leases, static mappings,
+	// DNS overrides); replaced on every import, below `hosts` in priority.
+	ImportedHosts map[string]string `yaml:"imported_hosts,omitempty"`
+	Retention     Retention         `yaml:"retention"`
+	ReverseDNS    bool              `yaml:"reverse_dns"`
+	Web           Web               `yaml:"web"`
+	API           API               `yaml:"api"`
+	MQTT          MQTT              `yaml:"mqtt"`
 
 	// DefaultNetworks is set when no networks were configured and the
 	// built-in private ranges are in use.
@@ -36,7 +39,7 @@ type Database struct {
 	// dashboard shows only the Live view and the API serves live data and
 	// counters since midnight from memory. Requires `traffic-monitor all`.
 	Enabled bool   `yaml:"enabled"`
-	Driver  string `yaml:"driver"` // sqlite | postgres
+	Driver  string `yaml:"driver"` // sqlite | postgres | mysql (also MariaDB)
 	DSN     string `yaml:"dsn"`
 }
 
@@ -182,9 +185,9 @@ func Parse(raw []byte) (*Config, error) {
 		return nil, fmt.Errorf("mqtt.devices must be named, all or none (got %q)", c.MQTT.Devices)
 	}
 	switch c.Database.Driver {
-	case "sqlite", "postgres":
+	case "sqlite", "postgres", "mysql":
 	default:
-		return nil, fmt.Errorf("database.driver must be sqlite or postgres (got %q)", c.Database.Driver)
+		return nil, fmt.Errorf("database.driver must be sqlite, postgres or mysql (got %q)", c.Database.Driver)
 	}
 	if c.SNMP.Enabled && c.SNMP.Target == "" {
 		return nil, fmt.Errorf("snmp.target (the firewall's IP) is required when SNMP is enabled")

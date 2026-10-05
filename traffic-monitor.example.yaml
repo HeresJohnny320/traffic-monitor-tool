@@ -10,10 +10,12 @@ database:
   # Set to true to keep history (days/weeks/months/years, top destinations).
   # The default is a local SQLite file: no server, nothing to install.
   enabled: false
-  driver: sqlite        # sqlite (local file) or postgres
+  driver: sqlite        # sqlite (local file), postgres, or mysql (also MariaDB)
   dsn: traffic-monitor.db      # path of the SQLite file
   # driver: postgres
   # dsn: postgres://traffic-monitor:secret@db-host:5432/traffic-monitor?sslmode=disable
+  # driver: mysql
+  # dsn: mysql://traffic-monitor:secret@db-host:3306/traffic_monitor   # add ?tls=true for TLS
 
 netflow:
   # UDP port the firewall exports NetFlow v5/v9/IPFIX to

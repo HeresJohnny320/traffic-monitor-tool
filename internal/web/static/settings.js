@@ -1,7 +1,7 @@
 // Settings tab: edits traffic-monitor.yaml through /api/settings. The model is the
 // same structure (and key names) as the YAML file.
 
-import { apiURL, changeHeaders, embedded } from "./embed.js";
+import { apiURL, changeHeaders, embedded, proxyURL } from "./embed.js";
 
 function h(tag, props = {}, ...kids) {
   const n = document.createElement(tag);
@@ -115,15 +115,23 @@ function render() {
     "No dashboard login is set, so anyone on your network can open this page and change settings. ",
     h("a", { href: "#settings", onclick: e => { e.preventDefault(); document.getElementById("set-security").scrollIntoView({ behavior: "smooth" }); } }, "Set a username and password"), "."));
 
+  // --- import from the firewall (only inside the pfSense web UI)
+  if (embedded && !readonly) out.push(section("import", "Import from pfSense",
+    "Reads your networks, VLANs, VPNs, interface names and device names (DHCP leases, static mappings, DNS overrides) from pfSense, and turns on softflowd and SNMP for this firewall if they aren't set up yet. It also runs every 15 minutes; names and networks you set yourself are kept.",
+    h("div", { class: "row-actions" },
+      h("button", { type: "button", id: "import-btn", onclick: runImport }, "Import now"),
+      h("span", { class: "hint", id: "import-msg" }, `${Object.keys(cfg.imported_hosts || {}).length} device names from pfSense`)),
+    h("ul", { class: "hint", id: "import-out" })));
+
   // --- storage
   const db = cfg.database.enabled;
   out.push(section("storage", "Storage", "Off = live-only: nothing is written anywhere. On = history by day, week, month and year.",
     grid(
       field("Keep history", toggle("database.enabled", db ? "On" : "Off (live only)")),
-      db && field("Where", select("database.driver", [["sqlite", "Local file (SQLite), nothing to install"], ["postgres", "PostgreSQL server"]], true)),
-      db && field(cfg.database.driver === "postgres" ? "Connection URL" : "File path",
-        text("database.dsn", { wide: true, placeholder: cfg.database.driver === "postgres" ? "postgres://user:pass@host:5432/traffic-monitor?sslmode=disable" : "traffic-monitor.db" }),
-        cfg.database.driver === "postgres" ? "The database must exist; tables are created automatically." : "Created automatically. A year of history for 20 devices is only a few MB."),
+      db && field("Where", select("database.driver", [["sqlite", "Local file (SQLite), nothing to install"], ["postgres", "PostgreSQL server"], ["mysql", "MySQL / MariaDB server"]], true)),
+      db && field(cfg.database.driver === "sqlite" ? "File path" : "Connection URL",
+        text("database.dsn", { wide: true, placeholder: dsnExample[cfg.database.driver] || dsnExample.sqlite }),
+        cfg.database.driver === "sqlite" ? "Created automatically. A year of history for 20 devices is only a few MB." : "The database must exist; tables are created automatically."),
       db && field("Minute detail", num("retention.minute_days"), "days to keep 1-minute data"),
       db && field("Hourly data", num("retention.hour_days"), "days, 0 = forever (days, weeks, months and years are built from this)"),
       db && field("Destinations", num("retention.peer_days"), "days to keep \"talking to\" data"),
@@ -131,7 +139,7 @@ function render() {
 
   // --- firewall data
   const snmp = cfg.snmp.enabled;
-  out.push(section("firewall", "Firewall data", "Nothing is installed on the firewall: it sends NetFlow and answers SNMP.",
+  out.push(section("firewall", "Firewall data", "The firewall sends NetFlow (pfSense: softflowd) and answers SNMP. On pfSense, Import sets both up.",
     h("h3", { class: "set-sub" }, "NetFlow (traffic per device)"),
     grid(
       field("Listen on", text("netflow.listen", { placeholder: ":2055" }),
@@ -280,6 +288,12 @@ function showMsg(msg, error) {
   document.getElementById("save-msg").textContent = msg;
 }
 
+const dsnExample = {
+  sqlite: "traffic-monitor.db",
+  postgres: "postgres://user:pass@host:5432/traffic-monitor?sslmode=disable",
+  mysql: "mysql://user:pass@host:3306/traffic_monitor",
+};
+
 async function save() {
   if (saving) return;
   serialize();
@@ -309,6 +323,30 @@ async function save() {
     saving = false;
     const b = document.getElementById("save-btn");
     if (b) b.disabled = false;
+  }
+}
+
+async function runImport() {
+  const btn = document.getElementById("import-btn"), msg = document.getElementById("import-msg"), list = document.getElementById("import-out");
+  if (dirty()) { msg.textContent = "Save or discard your changes first."; return; }
+  btn.disabled = true;
+  msg.textContent = "Importing from pfSense…";
+  list.replaceChildren();
+  try {
+    const r = await fetch(proxyURL("_import"), { method: "POST", headers: changeHeaders, body: "{}" });
+    const text = await r.text();
+    let res;
+    try { res = JSON.parse(text); } catch { throw new Error(text.trim() || r.statusText); }
+    if (!res.ok) throw new Error(res.error || "import failed");
+    const f = res.found;
+    msg.textContent = `Found ${f.networks} networks, ${f.interfaces} interfaces and ${f.devices} named devices. ` +
+      (res.changes.length ? "Applying…" : "Nothing new.");
+    list.replaceChildren(...res.notes.map(n => h("li", {}, n)), ...res.changes.map(c => h("li", {}, "Added or updated: " + c)));
+    if (res.changes.length) { await waitForRestart(); location.reload(); }
+  } catch (e) {
+    msg.textContent = "Import failed: " + (e.message || e);
+  } finally {
+    btn.disabled = false;
   }
 }
 

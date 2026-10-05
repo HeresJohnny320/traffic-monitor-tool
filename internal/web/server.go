@@ -94,6 +94,7 @@ func (s *Server) ui() http.Handler {
 	mux.HandleFunc("POST /api/ifaces/rename", db(s.renameIface))
 	mux.HandleFunc("GET /api/settings", s.getSettings)
 	mux.HandleFunc("PUT /api/settings", s.putSettings)
+	mux.HandleFunc("POST /api/import", s.importFirewall)
 	return mux
 }
 

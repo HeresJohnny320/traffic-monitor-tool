@@ -1,9 +1,13 @@
 package web
 
 import (
+	"net/http/httptest"
+	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
+	"trafficmonitor/internal/config"
 	"trafficmonitor/internal/snapshot"
 )
 
@@ -77,5 +81,45 @@ func TestGUIRewrite(t *testing.T) {
 	bad := get(t, h, "GET", "/", guiTokenHeader, testGUIToken, guiBaseHeader, `/x"><script>`).Body.String()
 	if strings.Contains(bad, "<script>\"") || !strings.Contains(bad, `href="style.css"`) {
 		t.Error("unsafe base should be ignored")
+	}
+}
+
+func TestImportEndpoint(t *testing.T) {
+	cfg, _ := config.Parse(nil)
+	path := filepath.Join(t.TempDir(), "traffic-monitor.yaml")
+	reloaded := make(chan bool, 4)
+	h := New(nil, snapshot.New(nil, testState()), Options{
+		UI: true, User: "admin", Pass: "pw", GUIToken: testGUIToken,
+		Config: cfg, ConfigPath: path, Cmd: "all", Reload: func() { reloaded <- true },
+	}).Handler()
+	body := `{"source":"pfSense test","networks":[{"name":"LAN","kind":"lan","cidr":["192.168.1.0/24"]}],
+		"hosts":{"192.168.1.200":"nas"},"snmp":{"target":"127.0.0.1","port":161,"community":"c"}}`
+	post := func(hdr ...string) *httptest.ResponseRecorder {
+		req := httptest.NewRequest("POST", "/api/import", strings.NewReader(body))
+		req.Host = "127.0.0.1:8080"
+		req.Header.Set("X-Traffic-Monitor", "1")
+		for i := 0; i+1 < len(hdr); i += 2 {
+			req.Header.Set(hdr[i], hdr[i+1])
+		}
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, req)
+		return rec
+	}
+	// a logged-in dashboard user can't import; only the firewall's proxy page
+	if c := post("Authorization", "Basic YWRtaW46cHc=").Code; c != 403 {
+		t.Errorf("basic auth import: got %d want 403", c)
+	}
+	rec := post(guiTokenHeader, testGUIToken)
+	if rec.Code != 200 || !strings.Contains(rec.Body.String(), `"changed":true`) {
+		t.Fatalf("import: %d %s", rec.Code, rec.Body)
+	}
+	saved, err := config.Load(path)
+	if err != nil || saved.DefaultNetworks || saved.Networks[0].Name != "LAN" || saved.ImportedHosts["192.168.1.200"] != "nas" || !saved.SNMP.Enabled {
+		t.Fatalf("saved config = %+v, %v", saved, err)
+	}
+	select {
+	case <-reloaded:
+	case <-time.After(2 * time.Second):
+		t.Error("no reload after a changing import")
 	}
 }

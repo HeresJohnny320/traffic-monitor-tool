@@ -49,7 +49,7 @@ Everything except the live dashboard is **off until you turn it on** (storage, A
 ┌─────────────────────────────┐                        or on any Linux/FreeBSD/Mac/Windows box)
 │ softflowd / NetFlow exporter│── NetFlow v5/v9/IPFIX ─►┌────────────────────┐    ┌──────────────┐
 │  (summaries of connections) │      UDP 2055           │ collector          │───►│ memory (live)│
-│                             │                         │                    │    │ SQLite/Postgres
+│                             │                         │                    │    │ SQLite/Postgres/MySQL
 │ SNMP (built in)             │◄── SNMP, UDP 161 ───────┤ (interface totals) │    │  (optional)  │
 └─────────────────────────────┘                         └─────────┬──────────┘    └──────────────┘
                                                                   │
@@ -60,7 +60,7 @@ Everything except the live dashboard is **off until you turn it on** (storage, A
 
 1. **NetFlow** — the firewall's flow exporter sends a small summary for each connection: source/destination IP and port, protocol, byte and packet counts, start/end time. Traffic Monitor adds them up per local IP. A flow between a local subnet and the outside is **internet** traffic (download or upload); between two local subnets it's **local** traffic.
 2. **SNMP** *(optional)* — polls the firewall's interface byte counters every 5 s for exact WAN/LAN/VLAN/VPN totals.
-3. **Live** numbers are kept in memory. **History** is written only if you turn storage on (SQLite file, or PostgreSQL).
+3. **Live** numbers are kept in memory. **History** is written only if you turn storage on (SQLite file, PostgreSQL, or MySQL/MariaDB).
 4. The **dashboard, API and MQTT** all read the same data.
 
 Nothing inspects packet contents and nothing is logged on the firewall. Compared with packet-capture tools like ntopng, this is why it's so light: the firewall's kernel already counts the bytes, Traffic Monitor only adds them up.
@@ -102,6 +102,7 @@ The installer:
 - downloads the release and **verifies its SHA-256 checksum**;
 - installs `/usr/local/bin/traffic-monitor`, runs it as an unprivileged user `trafficmon`, and starts it at boot (logs go to *Status → System Logs*);
 - writes `/usr/local/etc/traffic-monitor/traffic-monitor.yaml` with a **random admin password** (printed at the end) and NetFlow listening on **127.0.0.1 only**;
+- on pfSense, **sets everything up for you**: installs softflowd and points it at Traffic Monitor from every inside interface, turns on SNMP for localhost only, and imports your networks, VLANs, VPNs, interface names and device names (DHCP leases, static mappings, DNS overrides). If you already use softflowd or SNMP for something else, they're left alone and the installer tells you what to change. The import repeats every 15 minutes and can be run any time from *Settings → Import from pfSense*; names and networks you set yourself always win. Use `SETUP=0` to skip the softflowd/SNMP part;
 - adds Traffic Monitor to the firewall's own web UI: **pfSense → Status → Traffic Monitor**, **OPNsense → Reporting → Traffic Monitor**. The full dashboard and its Settings open there, behind the firewall's login;
 - prints the dashboard address and the two clicks needed on the firewall (next section).
 
@@ -164,8 +165,8 @@ Every setting is in the **Settings** tab and in `traffic-monitor.yaml` (same nam
 | Setting | Default | Meaning |
 |---|---|---|
 | `database.enabled` | `false` | Keep history. Off = live-only, nothing written anywhere |
-| `database.driver` | `sqlite` | `sqlite` (local file, nothing to install) or `postgres` |
-| `database.dsn` | `traffic-monitor.db` | SQLite file path, or `postgres://user:pass@host:5432/db?sslmode=disable` |
+| `database.driver` | `sqlite` | `sqlite` (local file, nothing to install), `postgres`, or `mysql` (MySQL 8+ / MariaDB 10.5+) |
+| `database.dsn` | `traffic-monitor.db` | SQLite file path, `postgres://user:pass@host:5432/db?sslmode=disable`, or `mysql://user:pass@host:3306/db` (add `?tls=true` for TLS) |
 | `retention.minute_days` | `14` | Days of 1-minute data |
 | `retention.hour_days` | `0` | Days of hourly data (0 = forever; day/week/month/year views use it) |
 | `retention.peer_days` | `30` | Days of per-device destination data |
@@ -366,7 +367,7 @@ go run ./cmd/fakeflow -to 127.0.0.1:2055   # synthetic NetFlow for trying the UI
 go run . all                                # dashboard on :8080
 ```
 
-Layout: `internal/netflow` (v5/v9/IPFIX decoder), `internal/collector` (aggregation, SNMP), `internal/live` (in-memory state), `internal/store` (SQLite/Postgres), `internal/snapshot` (shared view), `internal/web` (dashboard, settings, API, metrics; static UI embedded, no external scripts), `internal/hass` (MQTT discovery), `gui/` (pfSense/OPNsense web UI pages), `install.sh`.
+Layout: `internal/netflow` (v5/v9/IPFIX decoder), `internal/collector` (aggregation, SNMP), `internal/live` (in-memory state), `internal/store` (SQLite/Postgres/MySQL), `internal/snapshot` (shared view), `internal/web` (dashboard, settings, API, metrics; static UI embedded, no external scripts), `internal/hass` (MQTT discovery), `gui/` (pfSense/OPNsense web UI pages), `install.sh`.
 
 **CI** (`.github/workflows/ci.yml`) runs on every pull request: gofmt, vet, race tests, 60 s fuzzing, govulncheck, shellcheck, JS syntax, and builds for FreeBSD amd64/arm64/armv7 (pfSense/OPNsense), Linux amd64/arm64/armv7, macOS and Windows (downloadable from the run).
 **Releases**: every push to `main` (except docs-only changes) runs `.github/workflows/release.yml`, which tests, builds, and publishes the next version (v1.0, v1.1, … v1.9, v2.0, …) with archives, `SHA256SUMS` and `install.sh` with this repository filled in.

@@ -14,6 +14,8 @@
 #   VERSION=v1.2     install a specific release instead of the latest
 #   PORT=8080        dashboard port for a new install
 #   PURGE=1          with uninstall: also delete settings and history
+#   SETUP=0          pfSense: don't install/turn on softflowd and SNMP (the
+#                    import of networks and device names still runs)
 #   BASE_URL=...     download from a mirror instead of GitHub releases
 set -eu
 
@@ -67,8 +69,10 @@ UNIT=/etc/systemd/system/traffic-monitor.service
 # Traffic Monitor. traffic_monitor.php passes requests to the service.
 WWW=/usr/local/www
 OPN_MVC=/usr/local/opnsense/mvc/app
-GUI_FILES_PFSENSE="$WWW/traffic_monitor.php $WWW/status_traffic_monitor.php /usr/local/share/pfSense/menu/traffic_monitor.xml /etc/inc/priv/traffic_monitor.priv.inc"
-GUI_FILES_OPNSENSE="$WWW/traffic_monitor.php $OPN_MVC/controllers/OPNsense/TrafficMonitor $OPN_MVC/views/OPNsense/TrafficMonitor $OPN_MVC/models/OPNsense/TrafficMonitor"
+SHARE=/usr/local/share/traffic-monitor # shared PHP (traffic_monitor.inc) and the pfSense import
+IMPORT_CMD="/usr/local/bin/php -f $SHARE/pfsense_import.php"
+GUI_FILES_PFSENSE="$WWW/traffic_monitor.php $WWW/status_traffic_monitor.php /usr/local/share/pfSense/menu/traffic_monitor.xml /etc/inc/priv/traffic_monitor.priv.inc $SHARE"
+GUI_FILES_OPNSENSE="$WWW/traffic_monitor.php $OPN_MVC/controllers/OPNsense/TrafficMonitor $OPN_MVC/views/OPNsense/TrafficMonitor $OPN_MVC/models/OPNsense/TrafficMonitor $SHARE"
 
 download() { # url dest
   if command -v fetch >/dev/null 2>&1; then fetch -qo "$2" "$1"
@@ -147,10 +151,14 @@ install_gui() {
     warn "this release has no firewall web UI pages; use the dashboard on its own port"
     return
   fi
+  mkdir -p "$SHARE"
+  install -m 0644 "$g/traffic_monitor.inc" "$SHARE/traffic_monitor.inc"
   install -m 0644 "$g/traffic_monitor.php" "$WWW/traffic_monitor.php"
   case "$PLATFORM" in
     pfsense)
       mkdir -p /usr/local/share/pfSense/menu /etc/inc/priv
+      install -m 0644 "$g/pfsense/pfsense_import.inc" "$SHARE/pfsense_import.inc"
+      install -m 0644 "$g/pfsense/pfsense_import.php" "$SHARE/pfsense_import.php"
       install -m 0644 "$g/pfsense/status_traffic_monitor.php" "$WWW/status_traffic_monitor.php"
       install -m 0644 "$g/pfsense/traffic_monitor.xml" /usr/local/share/pfSense/menu/traffic_monitor.xml
       install -m 0644 "$g/pfsense/traffic_monitor.priv.inc" /etc/inc/priv/traffic_monitor.priv.inc
@@ -172,7 +180,37 @@ install_gui() {
   GUI_INSTALLED=yes
 }
 
+# import_pfsense reads networks, interfaces and device names from pfSense into
+# Traffic Monitor, and (unless SETUP=0) installs and points softflowd at it
+# and turns on SNMP on localhost, where you haven't set those up already.
+import_pfsense() {
+  [ -f "$SHARE/pfsense_import.php" ] || return 0
+  if [ "${SETUP:-1}" = 1 ]; then
+    if ! pkg-static info -e pfSense-pkg-softflowd >/dev/null 2>&1; then
+      say "Installing softflowd (sends per-device traffic to Traffic Monitor)"
+      pkg-static install -y pfSense-pkg-softflowd >/dev/null 2>&1 ||
+        warn "could not install softflowd; install it under System → Package Manager, then Settings → Import from pfSense"
+    fi
+  fi
+  # wait for the service to answer (it was just started)
+  i=0
+  while [ "$i" -lt 15 ] && ! fetch -qo /dev/null "http://127.0.0.1:$(dashboard_port)/api/status" 2>/dev/null; do
+    sleep 1; i=$((i + 1))
+  done
+  say "Importing networks, interfaces and device names from pfSense"
+  if [ "${SETUP:-1}" = 1 ]; then
+    /usr/local/bin/php -f "$SHARE/pfsense_import.php" -- --setup || warn "the import didn't finish; run it again from Settings → Import from pfSense"
+  else
+    /usr/local/bin/php -f "$SHARE/pfsense_import.php" || warn "the import didn't finish; run it again from Settings → Import from pfSense"
+  fi
+}
+
 remove_gui() {
+  if [ "$PLATFORM" = pfsense ] && [ -f "$SHARE/pfsense_import.php" ]; then
+    # drop the 15-minute import job (softflowd and SNMP are left as they are)
+    # shellcheck disable=SC2016 # $argv is PHP's
+    /usr/local/bin/php -r 'require_once("config.inc"); require_once("services.inc"); install_cron_job($argv[1], false);' -- "$IMPORT_CMD" >/dev/null 2>&1 || true
+  fi
   case "$PLATFORM" in
     pfsense) files=$GUI_FILES_PFSENSE ;;
     opnsense) files=$GUI_FILES_OPNSENSE ;;
@@ -344,6 +382,7 @@ do_install() {
   service_ctl start >/dev/null 2>&1 || true
   sleep 1
   service_ctl status >/dev/null 2>&1 || warn "the service did not start; check the log (see below)"
+  if [ "$PLATFORM" = pfsense ] && [ "$GUI_INSTALLED" = yes ]; then import_pfsense; fi
 
   port=$(dashboard_port)
   [ -n "$port" ] || port=$PORT
@@ -369,12 +408,10 @@ do_install() {
   echo
   case "$PLATFORM" in
     pfsense) cat <<EOF
-Next: send traffic data to it (nothing else is needed on the firewall).
-  1. System → Package Manager → Available Packages → install "softflowd".
-  2. Services → softflowd: Enable; Interface: LAN (+ VLANs, OpenVPN/WireGuard;
-     NOT WAN); Host: 127.0.0.1; Port: 2055; Netflow version: 9.
-  3. Optional, for WAN/VLAN/VPN totals: Services → SNMP → Enable, Bind
-     Interface: Localhost; then in the dashboard Settings → SNMP: 127.0.0.1.
+Your networks, VLANs, VPNs and device names were imported from pfSense, and
+softflowd sends per-device traffic to Traffic Monitor (see the lines above for
+anything that was left as you had it). Devices appear within a minute.
+Imports repeat every 15 minutes; run one any time from Settings → Import from pfSense.
 The dashboard is reachable from LAN by default. Never open port $port on WAN.
 EOF
     ;;

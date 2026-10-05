@@ -6,5 +6,7 @@ const csrf = meta("tm-csrf");
 
 export const embedded = base !== "";
 export const apiURL = path => `${base}api/${path}`;
+// requests handled by the firewall's proxy page itself (e.g. "_import")
+export const proxyURL = path => base + path;
 // headers for requests that change something
 export const changeHeaders = { "Content-Type": "application/json", "X-Traffic-Monitor": "1", ...(csrf && { "X-CSRFToken": csrf }) };

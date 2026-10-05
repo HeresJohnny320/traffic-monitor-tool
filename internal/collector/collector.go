@@ -83,9 +83,11 @@ func New(cfg *config.Config, db *store.DB, state *live.State) *Collector {
 			c.allowed = append(c.allowed, p)
 		}
 	}
-	for ip, name := range cfg.Hosts {
-		if a, err := netip.ParseAddr(ip); err == nil {
-			c.names[a] = name
+	for _, m := range []map[string]string{cfg.ImportedHosts, cfg.Hosts} { // fixed names win
+		for ip, name := range m {
+			if a, err := netip.ParseAddr(ip); err == nil {
+				c.names[a] = name
+			}
 		}
 	}
 	return c
@@ -503,7 +505,9 @@ func (c *Collector) forgetIdle(d time.Duration) {
 	for ip, s := range c.seen {
 		if s < cut {
 			delete(c.seen, ip)
-			if _, static := c.cfg.Hosts[ip.String()]; !static {
+			_, static := c.cfg.Hosts[ip.String()]
+			_, imported := c.cfg.ImportedHosts[ip.String()]
+			if !static && !imported {
 				delete(c.names, ip)
 			}
 		}

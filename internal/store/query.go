@@ -153,7 +153,7 @@ func (d *DB) Networks(ctx context.Context) ([]Network, error) {
 }
 
 func (d *DB) Meta(ctx context.Context) (map[string]string, error) {
-	rows, err := d.db.QueryContext(ctx, `SELECT key, value FROM meta`)
+	rows, err := d.db.QueryContext(ctx, `SELECT `+d.metaKey()+`, value FROM meta`)
 	if err != nil {
 		return nil, err
 	}
@@ -291,7 +291,9 @@ func (d *DB) useMinute(ctx context.Context, table string, from, to time.Time) bo
 	return !minHour.Valid || minHour.Int64 >= minMinute.Int64-minMinute.Int64%3600
 }
 
-const sums4 = "CAST(SUM(rx) AS BIGINT), CAST(SUM(tx) AS BIGINT), CAST(SUM(lan_rx) AS BIGINT), CAST(SUM(lan_tx) AS BIGINT)"
+func (d *DB) sums4() string {
+	return d.sum("rx") + ", " + d.sum("tx") + ", " + d.sum("lan_rx") + ", " + d.sum("lan_tx")
+}
 
 // hourAlign widens from to the start of its hour when reading an hourly table.
 func hourAlign(table string, from time.Time) time.Time {
@@ -326,7 +328,7 @@ func (d *DB) TopHosts(ctx context.Context, from, to time.Time, f Filter, limit i
 	w, args := f.where()
 	args = append([]any{from.Unix(), to.Unix()}, args...)
 	args = append(args, limit)
-	rows, err := d.db.QueryContext(ctx, d.q(`SELECT ip, `+sums4+` FROM `+table+`
+	rows, err := d.db.QueryContext(ctx, d.q(`SELECT ip, `+d.sums4()+` FROM `+table+`
 		WHERE ts >= ? AND ts < ?`+w+` GROUP BY ip ORDER BY SUM(rx) + SUM(tx) DESC, SUM(lan_rx) + SUM(lan_tx) DESC LIMIT ?`), args...)
 	if err != nil {
 		return nil, err
@@ -356,7 +358,7 @@ var stepSeconds = map[string]int64{"minute": 60, "5min": 300, "15min": 900, "hou
 // to hour when minute data has been pruned).
 func (d *DB) Series(ctx context.Context, from, to time.Time, step string, f Filter) ([]Point, string, error) {
 	w, fargs := f.where()
-	return d.series(ctx, "traffic", sums4, w, fargs, from, to, step)
+	return d.series(ctx, "traffic", d.sums4(), w, fargs, from, to, step)
 }
 
 // IfaceSeries is Series for an interface: Rx = in, Tx = out.
@@ -365,7 +367,7 @@ func (d *DB) IfaceSeries(ctx context.Context, from, to time.Time, step, name str
 	if name != "" {
 		w, args = ` AND name = ?`, []any{name}
 	}
-	return d.series(ctx, "iface", "CAST(SUM(in_bytes) AS BIGINT), CAST(SUM(out_bytes) AS BIGINT), 0, 0", w, args, from, to, step)
+	return d.series(ctx, "iface", d.sum("in_bytes")+", "+d.sum("out_bytes")+", 0, 0", w, args, from, to, step)
 }
 
 func (d *DB) series(ctx context.Context, prefix, cols, where string, wargs []any, from, to time.Time, step string) ([]Point, string, error) {
@@ -464,7 +466,7 @@ func (d *DB) Peers(ctx context.Context, from, to time.Time, f Filter, limit int)
 	w, wargs := f.where()
 	args := append([]any{from.Unix() - from.Unix()%3600, to.Unix()}, wargs...)
 	args = append(args, limit)
-	rows, err := d.db.QueryContext(ctx, d.q(`SELECT remote, proto, port, CAST(SUM(rx) AS BIGINT), CAST(SUM(tx) AS BIGINT) FROM peer_hour
+	rows, err := d.db.QueryContext(ctx, d.q(`SELECT remote, proto, port, `+d.sum("rx")+`, `+d.sum("tx")+` FROM peer_hour
 		WHERE ts >= ? AND ts < ?`+w+` GROUP BY remote, proto, port ORDER BY SUM(rx) + SUM(tx) DESC LIMIT ?`), args...)
 	if err != nil {
 		return nil, err
@@ -488,7 +490,7 @@ func (d *DB) IfaceTotals(ctx context.Context, from, to time.Time) ([]IfaceTotal,
 		table = "iface_minute"
 	}
 	from = hourAlign(table, from)
-	rows, err := d.db.QueryContext(ctx, d.q(`SELECT name, CAST(SUM(in_bytes) AS BIGINT), CAST(SUM(out_bytes) AS BIGINT) FROM `+table+`
+	rows, err := d.db.QueryContext(ctx, d.q(`SELECT name, `+d.sum("in_bytes")+`, `+d.sum("out_bytes")+` FROM `+table+`
 		WHERE ts >= ? AND ts < ? GROUP BY name`), from.Unix(), to.Unix())
 	if err != nil {
 		return nil, err

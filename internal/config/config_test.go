@@ -83,7 +83,7 @@ func TestValidation(t *testing.T) {
 		"networks: [{name: '', cidr: [10.0.0.0/8]}]",
 		"networks: [{name: A, cidr: [10.0.0.0/8]}, {name: A, cidr: [10.1.0.0/16]}]",
 		"snmp: {enabled: true}",
-		"database: {driver: mysql}",
+		"database: {driver: oracle}",
 	} {
 		if _, err := Parse([]byte(bad)); err == nil {
 			t.Errorf("expected error for %s", bad)

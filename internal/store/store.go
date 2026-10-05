@@ -1,4 +1,4 @@
-// Package store persists traffic data to SQLite or PostgreSQL.
+// Package store persists traffic data to SQLite, PostgreSQL or MySQL/MariaDB.
 //
 // All counters are written as additive upserts, so late-arriving flow records
 // simply add to the bucket they belong to.
@@ -7,18 +7,30 @@ package store
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
+	"net/url"
 	"strconv"
 	"strings"
 	"time"
 
+	"github.com/go-sql-driver/mysql"
 	_ "github.com/jackc/pgx/v5/stdlib"
 	_ "modernc.org/sqlite"
 )
 
+// dialect is the SQL flavour of the database in use.
+type dialect int
+
+const (
+	sqliteDB dialect = iota
+	postgresDB
+	mysqlDB
+)
+
 type DB struct {
-	db *sql.DB
-	pg bool
+	db   *sql.DB
+	dial dialect
 }
 
 // Open connects to the database and creates the schema if needed.
@@ -35,13 +47,23 @@ func Open(driver, dsn string) (*DB, error) {
 			d.db.SetMaxOpenConns(4)
 		}
 	case "postgres", "postgresql", "pgx":
-		d.pg = true
+		d.dial = postgresDB
 		d.db, err = sql.Open("pgx", dsn)
 		if err == nil {
 			d.db.SetMaxOpenConns(10)
 		}
+	case "mysql", "mariadb":
+		d.dial = mysqlDB
+		if dsn, err = mysqlDSN(dsn); err != nil {
+			return nil, err
+		}
+		d.db, err = sql.Open("mysql", dsn)
+		if err == nil {
+			d.db.SetMaxOpenConns(10)
+			d.db.SetConnMaxLifetime(5 * time.Minute) // before the server's wait_timeout closes it
+		}
 	default:
-		return nil, fmt.Errorf("unknown database driver %q (use sqlite or postgres)", driver)
+		return nil, fmt.Errorf("unknown database driver %q (use sqlite, postgres or mysql)", driver)
 	}
 	if err != nil {
 		return nil, err
@@ -58,6 +80,44 @@ func Open(driver, dsn string) (*DB, error) {
 }
 
 func (d *DB) Close() error { return d.db.Close() }
+
+// mysqlDSN accepts the driver's own format (user:pass@tcp(host:3306)/db) or
+// a URL (mysql://user:pass@host:3306/db?tls=true) and returns the former.
+func mysqlDSN(dsn string) (string, error) {
+	if !strings.HasPrefix(dsn, "mysql://") && !strings.HasPrefix(dsn, "mariadb://") {
+		if _, err := mysql.ParseDSN(dsn); err != nil {
+			return "", fmt.Errorf("mysql connection: %w (example: mysql://user:pass@host:3306/traffic_monitor)", err)
+		}
+		return dsn, nil
+	}
+	u, err := url.Parse(dsn)
+	if err != nil {
+		return "", fmt.Errorf("mysql connection URL: %w", err)
+	}
+	c := mysql.NewConfig()
+	c.User = u.User.Username()
+	c.Passwd, _ = u.User.Password()
+	c.Net = "tcp"
+	c.Addr = u.Host
+	if u.Port() == "" {
+		c.Addr = u.Hostname() + ":3306"
+	}
+	c.DBName = strings.TrimPrefix(u.Path, "/")
+	if c.DBName == "" {
+		return "", errors.New("mysql connection URL needs a database name, e.g. mysql://user:pass@host:3306/traffic_monitor")
+	}
+	for k, v := range u.Query() {
+		if k == "tls" {
+			c.TLSConfig = v[0]
+			continue
+		}
+		if c.Params == nil {
+			c.Params = map[string]string{}
+		}
+		c.Params[k] = v[0]
+	}
+	return c.FormatDSN(), nil
+}
 
 const schema = `
 CREATE TABLE IF NOT EXISTS traffic_minute (
@@ -104,8 +164,56 @@ CREATE TABLE IF NOT EXISTS live_ifaces (
 CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
 `
 
+// MySQL can't index TEXT columns without a length or create indexes "IF NOT
+// EXISTS", and KEY is a reserved word: same tables, MySQL types.
+const mysqlSchema = `
+CREATE TABLE IF NOT EXISTS traffic_minute (
+	ts BIGINT NOT NULL, ip VARCHAR(64) NOT NULL,
+	rx BIGINT NOT NULL DEFAULT 0, tx BIGINT NOT NULL DEFAULT 0,
+	lan_rx BIGINT NOT NULL DEFAULT 0, lan_tx BIGINT NOT NULL DEFAULT 0,
+	PRIMARY KEY (ts, ip), INDEX traffic_minute_ip (ip, ts));
+CREATE TABLE IF NOT EXISTS traffic_hour (
+	ts BIGINT NOT NULL, ip VARCHAR(64) NOT NULL,
+	rx BIGINT NOT NULL DEFAULT 0, tx BIGINT NOT NULL DEFAULT 0,
+	lan_rx BIGINT NOT NULL DEFAULT 0, lan_tx BIGINT NOT NULL DEFAULT 0,
+	PRIMARY KEY (ts, ip), INDEX traffic_hour_ip (ip, ts));
+CREATE TABLE IF NOT EXISTS peer_hour (
+	ts BIGINT NOT NULL, ip VARCHAR(64) NOT NULL, remote VARCHAR(64) NOT NULL,
+	proto INTEGER NOT NULL, port INTEGER NOT NULL,
+	rx BIGINT NOT NULL DEFAULT 0, tx BIGINT NOT NULL DEFAULT 0,
+	PRIMARY KEY (ts, ip, remote, proto, port), INDEX peer_hour_ip (ip, ts));
+CREATE TABLE IF NOT EXISTS iface_minute (
+	ts BIGINT NOT NULL, name VARCHAR(128) NOT NULL,
+	in_bytes BIGINT NOT NULL DEFAULT 0, out_bytes BIGINT NOT NULL DEFAULT 0,
+	PRIMARY KEY (ts, name));
+CREATE TABLE IF NOT EXISTS iface_hour (
+	ts BIGINT NOT NULL, name VARCHAR(128) NOT NULL,
+	in_bytes BIGINT NOT NULL DEFAULT 0, out_bytes BIGINT NOT NULL DEFAULT 0,
+	PRIMARY KEY (ts, name));
+CREATE TABLE IF NOT EXISTS hosts (
+	ip VARCHAR(64) PRIMARY KEY, name VARCHAR(255) NOT NULL DEFAULT '', custom_name VARCHAR(255) NOT NULL DEFAULT '',
+	network VARCHAR(255) NOT NULL DEFAULT '', kind VARCHAR(32) NOT NULL DEFAULT '',
+	first_seen BIGINT NOT NULL DEFAULT 0, last_seen BIGINT NOT NULL DEFAULT 0);
+CREATE TABLE IF NOT EXISTS ifaces (
+	name VARCHAR(128) PRIMARY KEY, label VARCHAR(255) NOT NULL DEFAULT '', custom_label VARCHAR(255) NOT NULL DEFAULT '',
+	kind VARCHAR(32) NOT NULL DEFAULT '', speed BIGINT NOT NULL DEFAULT 0, last_seen BIGINT NOT NULL DEFAULT 0);
+CREATE TABLE IF NOT EXISTS networks (
+	name VARCHAR(255) PRIMARY KEY, kind VARCHAR(32) NOT NULL DEFAULT '', cidrs TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS live_hosts (
+	ip VARCHAR(64) PRIMARY KEY, rx_bps DOUBLE PRECISION NOT NULL, tx_bps DOUBLE PRECISION NOT NULL,
+	lan_rx_bps DOUBLE PRECISION NOT NULL, lan_tx_bps DOUBLE PRECISION NOT NULL, updated BIGINT NOT NULL);
+CREATE TABLE IF NOT EXISTS live_ifaces (
+	name VARCHAR(128) PRIMARY KEY, in_bps DOUBLE PRECISION NOT NULL, out_bps DOUBLE PRECISION NOT NULL,
+	updated BIGINT NOT NULL);
+CREATE TABLE IF NOT EXISTS meta (` + "`key`" + ` VARCHAR(128) PRIMARY KEY, value TEXT NOT NULL);
+`
+
 func (d *DB) migrate(ctx context.Context) error {
-	for _, stmt := range strings.Split(schema, ";") {
+	ddl := schema
+	if d.dial == mysqlDB {
+		ddl = mysqlSchema
+	}
+	for _, stmt := range strings.Split(ddl, ";") {
 		if strings.TrimSpace(stmt) == "" {
 			continue
 		}
@@ -118,7 +226,7 @@ func (d *DB) migrate(ctx context.Context) error {
 
 // q rewrites ? placeholders to $N for PostgreSQL.
 func (d *DB) q(s string) string {
-	if !d.pg {
+	if d.dial != postgresDB {
 		return s
 	}
 	var b strings.Builder
@@ -177,6 +285,38 @@ type LiveIface struct {
 	InBps, OutBps float64
 }
 
+// upsert starts the "insert or update" clause for a row that already exists
+// (by primary key); ex names the value the INSERT tried to write.
+func (d *DB) upsert(key string) string {
+	if d.dial == mysqlDB {
+		return " ON DUPLICATE KEY UPDATE "
+	}
+	return " ON CONFLICT (" + key + ") DO UPDATE SET "
+}
+
+func (d *DB) ex(col string) string {
+	if d.dial == mysqlDB {
+		return "VALUES(" + col + ")"
+	}
+	return "excluded." + col
+}
+
+// sum totals a column as a 64-bit integer.
+func (d *DB) sum(col string) string {
+	if d.dial == mysqlDB {
+		return "CAST(SUM(" + col + ") AS SIGNED)"
+	}
+	return "CAST(SUM(" + col + ") AS BIGINT)"
+}
+
+// metaKey is the meta table's key column (KEY is reserved in MySQL).
+func (d *DB) metaKey() string {
+	if d.dial == mysqlDB {
+		return "`key`"
+	}
+	return "key"
+}
+
 func (d *DB) tx(ctx context.Context, fn func(*sql.Tx) error) error {
 	tx, err := d.db.BeginTx(ctx, nil)
 	if err != nil {
@@ -197,9 +337,9 @@ func (d *DB) WriteTraffic(ctx context.Context, hosts []HostBucket, peers []PeerB
 	}
 	return d.tx(ctx, func(tx *sql.Tx) error {
 		up := func(table string) (*sql.Stmt, error) {
-			return tx.PrepareContext(ctx, d.q(`INSERT INTO `+table+` (ts, ip, rx, tx, lan_rx, lan_tx) VALUES (?,?,?,?,?,?)
-				ON CONFLICT (ts, ip) DO UPDATE SET rx = `+table+`.rx + excluded.rx, tx = `+table+`.tx + excluded.tx,
-				lan_rx = `+table+`.lan_rx + excluded.lan_rx, lan_tx = `+table+`.lan_tx + excluded.lan_tx`))
+			return tx.PrepareContext(ctx, d.q(`INSERT INTO `+table+` (ts, ip, rx, tx, lan_rx, lan_tx) VALUES (?,?,?,?,?,?)`+
+				d.upsert("ts, ip")+`rx = `+table+`.rx + `+d.ex("rx")+`, tx = `+table+`.tx + `+d.ex("tx")+`,
+				lan_rx = `+table+`.lan_rx + `+d.ex("lan_rx")+`, lan_tx = `+table+`.lan_tx + `+d.ex("lan_tx")))
 		}
 		minute, err := up("traffic_minute")
 		if err != nil {
@@ -224,8 +364,8 @@ func (d *DB) WriteTraffic(ctx context.Context, hosts []HostBucket, peers []PeerB
 		if len(peers) == 0 {
 			return nil
 		}
-		peer, err := tx.PrepareContext(ctx, d.q(`INSERT INTO peer_hour (ts, ip, remote, proto, port, rx, tx) VALUES (?,?,?,?,?,?,?)
-			ON CONFLICT (ts, ip, remote, proto, port) DO UPDATE SET rx = peer_hour.rx + excluded.rx, tx = peer_hour.tx + excluded.tx`))
+		peer, err := tx.PrepareContext(ctx, d.q(`INSERT INTO peer_hour (ts, ip, remote, proto, port, rx, tx) VALUES (?,?,?,?,?,?,?)`+
+			d.upsert("ts, ip, remote, proto, port")+`rx = peer_hour.rx + `+d.ex("rx")+`, tx = peer_hour.tx + `+d.ex("tx")))
 		if err != nil {
 			return err
 		}
@@ -245,9 +385,9 @@ func (d *DB) WriteIfaces(ctx context.Context, buckets []IfaceBucket) error {
 	}
 	return d.tx(ctx, func(tx *sql.Tx) error {
 		for _, table := range []string{"iface_minute", "iface_hour"} {
-			st, err := tx.PrepareContext(ctx, d.q(`INSERT INTO `+table+` (ts, name, in_bytes, out_bytes) VALUES (?,?,?,?)
-				ON CONFLICT (ts, name) DO UPDATE SET in_bytes = `+table+`.in_bytes + excluded.in_bytes,
-				out_bytes = `+table+`.out_bytes + excluded.out_bytes`))
+			st, err := tx.PrepareContext(ctx, d.q(`INSERT INTO `+table+` (ts, name, in_bytes, out_bytes) VALUES (?,?,?,?)`+
+				d.upsert("ts, name")+`in_bytes = `+table+`.in_bytes + `+d.ex("in_bytes")+`,
+				out_bytes = `+table+`.out_bytes + `+d.ex("out_bytes")))
 			if err != nil {
 				return err
 			}
@@ -272,11 +412,12 @@ func (d *DB) UpsertHosts(ctx context.Context, hosts []HostInfo) error {
 		return nil
 	}
 	return d.tx(ctx, func(tx *sql.Tx) error {
-		st, err := tx.PrepareContext(ctx, d.q(`INSERT INTO hosts (ip, name, network, kind, first_seen, last_seen) VALUES (?,?,?,?,?,?)
-			ON CONFLICT (ip) DO UPDATE SET
-				name = CASE WHEN excluded.name <> '' THEN excluded.name ELSE hosts.name END,
-				network = excluded.network, kind = excluded.kind,
-				last_seen = CASE WHEN excluded.last_seen > hosts.last_seen THEN excluded.last_seen ELSE hosts.last_seen END`))
+		name, seen := d.ex("name"), d.ex("last_seen")
+		st, err := tx.PrepareContext(ctx, d.q(`INSERT INTO hosts (ip, name, network, kind, first_seen, last_seen) VALUES (?,?,?,?,?,?)`+
+			d.upsert("ip")+`
+				name = CASE WHEN `+name+` <> '' THEN `+name+` ELSE hosts.name END,
+				network = `+d.ex("network")+`, kind = `+d.ex("kind")+`,
+				last_seen = CASE WHEN `+seen+` > hosts.last_seen THEN `+seen+` ELSE hosts.last_seen END`))
 		if err != nil {
 			return err
 		}
@@ -294,9 +435,9 @@ func (d *DB) UpsertIfaces(ctx context.Context, ifs []IfaceInfo) error {
 	now := time.Now().Unix()
 	return d.tx(ctx, func(tx *sql.Tx) error {
 		for _, i := range ifs {
-			_, err := tx.ExecContext(ctx, d.q(`INSERT INTO ifaces (name, label, kind, speed, last_seen) VALUES (?,?,?,?,?)
-				ON CONFLICT (name) DO UPDATE SET label = excluded.label, kind = excluded.kind,
-				speed = excluded.speed, last_seen = excluded.last_seen`), i.Name, i.Label, i.Kind, i64(i.Speed), now)
+			_, err := tx.ExecContext(ctx, d.q(`INSERT INTO ifaces (name, label, kind, speed, last_seen) VALUES (?,?,?,?,?)`+
+				d.upsert("name")+`label = `+d.ex("label")+`, kind = `+d.ex("kind")+`,
+				speed = `+d.ex("speed")+`, last_seen = `+d.ex("last_seen")), i.Name, i.Label, i.Kind, i64(i.Speed), now)
 			if err != nil {
 				return err
 			}
@@ -359,8 +500,8 @@ func (d *DB) SetLiveIfaces(ctx context.Context, ifs []LiveIface) error {
 func (d *DB) SetMeta(ctx context.Context, kv map[string]string) error {
 	return d.tx(ctx, func(tx *sql.Tx) error {
 		for k, v := range kv {
-			if _, err := tx.ExecContext(ctx, d.q(`INSERT INTO meta (key, value) VALUES (?,?)
-				ON CONFLICT (key) DO UPDATE SET value = excluded.value`), k, v); err != nil {
+			if _, err := tx.ExecContext(ctx, d.q(`INSERT INTO meta (`+d.metaKey()+`, value) VALUES (?,?)`+
+				d.upsert("key")+`value = `+d.ex("value")), k, v); err != nil {
 				return err
 			}
 		}
