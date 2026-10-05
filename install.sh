@@ -92,13 +92,17 @@ install_binary() {
   download "$base/SHA256SUMS" "$tmp/SHA256SUMS" || die "download failed: SHA256SUMS"
   want=$(grep " $asset\$" "$tmp/SHA256SUMS" | cut -d' ' -f1)
   got=$(sha256_of "$tmp/$asset")
-  [ -n "$want" ] && [ "$want" = "$got" ] || die "checksum mismatch for $asset (expected $want, got $got)"
+  if [ -z "$want" ] || [ "$want" != "$got" ]; then
+    die "checksum mismatch for $asset (expected $want, got $got)"
+  fi
   say "Checksum OK"
 
   tar -xzf "$tmp/$asset" -C "$tmp"
   install -m 0755 "$tmp/traffic-monitor" "$BIN.new"
   mv -f "$BIN.new" "$BIN"
-  [ -f "$tmp/traffic-monitor.example.yaml" ] && install -m 0644 "$tmp/traffic-monitor.example.yaml" "$CONF_DIR/traffic-monitor.example.yaml" 2>/dev/null || true
+  if [ -f "$tmp/traffic-monitor.example.yaml" ]; then
+    install -m 0644 "$tmp/traffic-monitor.example.yaml" "$CONF_DIR/traffic-monitor.example.yaml" 2>/dev/null || true
+  fi
   say "Installed $("$BIN" version)"
 }
 
@@ -257,7 +261,11 @@ do_install() {
   [ -n "$port" ] || port=$PORT
   ip=$(lan_ip); [ -n "$ip" ] || ip="<this-machine>"
   echo
-  [ "$running" = yes ] && say "Upgraded and restarted." || say "Traffic Monitor is running."
+  if [ "$running" = yes ]; then
+    say "Upgraded and restarted."
+  else
+    say "Traffic Monitor is running."
+  fi
   echo "    Dashboard:  http://$ip:$port"
   if [ -n "$NEW_PASSWORD" ]; then
     echo "    Login:      admin / $NEW_PASSWORD"
