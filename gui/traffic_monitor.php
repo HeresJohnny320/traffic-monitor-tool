@@ -9,6 +9,29 @@
  * skips its own login and lets the firewall's pages frame it.
  */
 
+// pfSense's web server replaces 404 and 5xx answers with its own error page,
+// which would hide what went wrong; those are sent as 424 instead, with the
+// original code in X-Traffic-Monitor-Status. The dashboard only checks r.ok.
+define("TM_ERROR_STATUS", 424);
+function tm_status($code)
+{
+	if ($code == 404 || $code >= 500) {
+		header("X-Traffic-Monitor-Status: $code");
+		return TM_ERROR_STATUS;
+	}
+	return $code;
+}
+
+// show a crash in this page instead of the web server's blank error page
+register_shutdown_function(function () {
+	$e = error_get_last();
+	if ($e && ($e["type"] & (E_ERROR | E_PARSE | E_CORE_ERROR | E_COMPILE_ERROR)) && !headers_sent()) {
+		http_response_code(TM_ERROR_STATUS);
+		header("Content-Type: text/plain; charset=utf-8");
+		echo "Traffic Monitor: PHP error: {$e["message"]} in {$e["file"]}:{$e["line"]}\n";
+	}
+});
+
 $nocsrf = true; // pfSense: the dashboard's own CSRF header is checked below instead
 require_once("guiconfig.inc");
 
@@ -21,7 +44,7 @@ define("TM_BASE", "/traffic_monitor.php?p=");
 
 function tm_fail($code, $msg)
 {
-	http_response_code($code);
+	http_response_code(tm_status($code));
 	header("Content-Type: text/plain; charset=utf-8");
 	echo $msg, "\n";
 	exit;
@@ -57,8 +80,9 @@ function tm_target()
 
 $token = trim((string)@file_get_contents(TM_DIR . "/gui-token"));
 if ($token === "") {
-	tm_fail(503, "Traffic Monitor: " . TM_DIR . "/gui-token is missing; re-run install.sh.");
+	tm_fail(503, "Traffic Monitor: " . TM_DIR . "/gui-token is missing or unreadable; re-run install.sh.");
 }
+$target = tm_target();
 if (!function_exists("curl_init")) {
 	tm_fail(500, "Traffic Monitor: PHP's curl extension is not available.");
 }
@@ -93,7 +117,7 @@ if ($changing) {
 }
 
 $resp_headers = array();
-$ch = curl_init(tm_target() . "/" . $path);
+$ch = curl_init($target . "/" . $path);
 curl_setopt_array($ch, array(
 	CURLOPT_CUSTOMREQUEST => $method,
 	CURLOPT_NOBODY => ($method === "HEAD"),
@@ -115,9 +139,11 @@ if ($changing) {
 }
 $body = curl_exec($ch);
 if ($body === false) {
-	tm_fail(502, "Traffic Monitor is not responding (" . curl_error($ch) . "). Is the service running? Status → System Logs shows its log.");
+	tm_fail(502, "Traffic Monitor is not responding at $target (" . curl_error($ch) . ").\n" .
+		"Is the service running? Check with: service traffic_monitor.sh status (pfSense) or service traffic_monitor status (OPNsense).\n" .
+		"Its log is under Status → System Logs → General (traffic-monitor).");
 }
-http_response_code(curl_getinfo($ch, CURLINFO_RESPONSE_CODE));
+http_response_code(tm_status(curl_getinfo($ch, CURLINFO_RESPONSE_CODE)));
 curl_close($ch);
 
 foreach (array("content-type", "cache-control", "content-security-policy", "x-frame-options", "x-content-type-options", "referrer-policy") as $h) {
