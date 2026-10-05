@@ -94,7 +94,7 @@ Nothing inspects packet contents and nothing is logged on the firewall. Compared
 Log in as **root** over SSH (pfSense: option *8 Shell*; OPNsense: option *8 Shell*) and run:
 
 ```sh
-fetch -qo - https://github.com/OWNER/traffic-monitor/releases/latest/download/install.sh | sh
+fetch -qo - https://github.com/heresjohnny320/traffic-monitor-tool/releases/latest/download/install.sh | sh
 ```
 
 The installer:
@@ -111,14 +111,14 @@ Then open **`http://<firewall-LAN-IP>:8080`**.
 ### On another machine (Linux with systemd)
 
 ```sh
-curl -fsSL https://github.com/OWNER/traffic-monitor/releases/latest/download/install.sh | sudo sh
+curl -fsSL https://github.com/heresjohnny320/traffic-monitor-tool/releases/latest/download/install.sh | sudo sh
 ```
 
 Same as above, with a hardened systemd service (`journalctl -u traffic-monitor -f` for logs), settings in `/etc/traffic-monitor/`, data in `/var/lib/traffic-monitor/`. Point the firewall's NetFlow at this machine's IP and set **Settings → Accept flows from** to the firewall's IP.
 
 ### Manual / other systems (macOS, Windows, Docker hosts)
 
-Download the archive for your platform from [Releases](https://github.com/OWNER/traffic-monitor/releases), extract it and run:
+Download the archive for your platform from [Releases](https://github.com/heresjohnny320/traffic-monitor-tool/releases), extract it and run:
 
 ```sh
 ./traffic-monitor all            # then open http://localhost:8080
@@ -330,7 +330,7 @@ Measured at ~1 000 flow records/second (far more than a busy home network): **~1
 
 ```sh
 # upgrade (keeps settings and history) — just run the installer again
-fetch -qo - https://github.com/OWNER/traffic-monitor/releases/latest/download/install.sh | sh
+fetch -qo - https://github.com/heresjohnny320/traffic-monitor-tool/releases/latest/download/install.sh | sh
 # specific version
 fetch -qo - .../install.sh | VERSION=v1.2.0 sh
 # uninstall (keeps settings/history); PURGE=1 also deletes them
