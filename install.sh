@@ -248,12 +248,21 @@ load_rc_config $name
 : ${traffic_monitor_config:="/usr/local/etc/traffic-monitor/traffic-monitor.yaml"}
 : ${traffic_monitor_dir:="/var/db/traffic-monitor"}
 
-# daemon(8) supervises (restarts on crash), drops to the service user and
-# sends output to syslog (Status → System Logs on pfSense/OPNsense)
+# daemon(8) supervises (restarts on crash) and sends output to syslog
+# (Status → System Logs on pfSense/OPNsense). rc.subr starts it as
+# ${traffic_monitor_user}, so daemon must not switch users itself (-u needs
+# root and fails with "initgroups: Operation not permitted"), and the pid file
+# is created for that user first.
 pidfile="/var/run/${name}.pid"
 command="/usr/sbin/daemon"
-command_args="-r -S -T traffic-monitor -P ${pidfile} -u ${traffic_monitor_user} /usr/local/bin/traffic-monitor all -config ${traffic_monitor_config}"
-start_precmd="cd ${traffic_monitor_dir}"
+command_args="-r -S -T traffic-monitor -P ${pidfile} /usr/local/bin/traffic-monitor all -config ${traffic_monitor_config}"
+traffic_monitor_chdir="${traffic_monitor_dir}"
+start_precmd="traffic_monitor_prestart"
+
+traffic_monitor_prestart()
+{
+	install -o "${traffic_monitor_user}" -m 0644 /dev/null "${pidfile}"
+}
 
 run_rc_command "$1"
 EOF
